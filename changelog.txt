@@ -1,3 +1,7 @@
+[B]0.1.1[/B]
+• The "Recent queues" button in the skin's music row no longer disappears. It used to hide itself while the history was empty, which relied on the add-on keeping a value alive on the home screen — and on Android that value is lost every time Kodi goes to the background, so the button went missing and stayed missing
+• The button is now shown whenever the add-on is installed. Opening it with nothing recorded says so
+
 [B]0.1.0[/B]
 • First release. Records the music queue every time it is taken away — when a new album or playlist replaces it, when a video interrupts it, when playback is stopped, and when Kodi quits
 • Each entry remembers which track was playing and how far into it, and restores to exactly that point rather than starting the track again
