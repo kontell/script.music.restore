@@ -2,7 +2,7 @@
 <!-- The script extension point comes first deliberately: an addon's LibPath is
      taken from its first <extension>, and that is what RunScript resolves when
      the skin's "Recent queues" widget button fires. -->
-<addon id="script.music.restore" name="Restore Music Queue" version="0.1.1" provider-name="kontell">
+<addon id="script.music.restore" name="Restore Music Queue" version="0.2.0" provider-name="kontell">
   <requires>
     <import addon="xbmc.python" version="3.0.1"/>
   </requires>
@@ -15,7 +15,7 @@
     <license>GPL-3.0-only</license>
     <source>https://github.com/kontell/script.music.restore</source>
     <summary lang="en_GB">Bring back a music queue you were part-way through</summary>
-    <description lang="en_GB">Records the music queue every time it is taken away — when a new album replaces it, when a video interrupts it, when playback is stopped, and when Kodi quits — along with which track you were on and how far into it. Pick one back off the list and it resumes on the right track at the right second. Reached from the "Recent queues" button in the skin's music categories row, or by running the addon.</description>
+    <description lang="en_GB">Records the music queue every time it is taken away — when a new album replaces it, when a video interrupts it, when playback is stopped, and when Kodi quits — along with which track you were on and how far into it. Pick one back off the list and it resumes on the right track at the right second. Reached from the "Recent queues" button the add-on can place on the skin's music categories row (Estuary and Contuary, from the add-on settings), or by running the add-on.</description>
     <assets>
       <icon>resources/icon.png</icon>
       <fanart>resources/fanart.jpg</fanart>
