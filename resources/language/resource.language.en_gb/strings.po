@@ -35,6 +35,14 @@ msgctxt "#30006"
 msgid "Load a restored queue on the right track at the right second, but wait for you to press play. Off by default, so restoring picks up where you left off straight away."
 msgstr ""
 
+msgctxt "#30007"
+msgid "Show in the music library"
+msgstr ""
+
+msgctxt "#30008"
+msgid "Add a \"Recent queues\" entry to Kodi's music library, which is what puts it in a skin's music row.[CR][CR]If this profile has no music library nodes of its own yet, Kodi's defaults are copied in first — otherwise the single new entry would replace Artists, Albums and the rest."
+msgstr ""
+
 msgctxt "#30010"
 msgid "Recent queues"
 msgstr ""
@@ -49,6 +57,10 @@ msgstr ""
 
 msgctxt "#30013"
 msgid "Restoring"
+msgstr ""
+
+msgctxt "#30014"
+msgid "Nothing set aside yet"
 msgstr ""
 
 # Row titles. {0}/{1} are substituted by the addon.

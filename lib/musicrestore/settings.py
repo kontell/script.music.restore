@@ -45,5 +45,13 @@ def start_paused() -> bool:
         return False
 
 
+def install_node() -> bool:
+    """Keep a "Recent queues" entry in the music library node list."""
+    try:
+        return bool(_addon().getSettingBool("installNode"))
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def localised(string_id: int) -> str:
     return str(_addon().getLocalizedString(string_id))

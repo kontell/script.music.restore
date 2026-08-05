@@ -1,3 +1,10 @@
+[B]0.2.0[/B]
+• Adds a "Recent queues" entry to Kodi's music library, which is what puts it in the music row on the home screen. This works in any skin and needs no skin changes
+• Selecting it opens a list of the recorded queues; picking one restores it, exactly as the pop-up does
+• The pop-up is unchanged and still what you get from running the add-on
+• If this profile has no music library entries of its own yet, Kodi's defaults are copied in first, so Artists, Albums and the rest are not lost
+• Can be turned off in settings, which removes the entry again
+
 [B]0.1.1[/B]
 • The "Recent queues" button in the skin's music row no longer disappears. It used to hide itself while the history was empty, which relied on the add-on keeping a value alive on the home screen — and on Android that value is lost every time Kodi goes to the background, so the button went missing and stayed missing
 • The button is now shown whenever the add-on is installed. Opening it with nothing recorded says so

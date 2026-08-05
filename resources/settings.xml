@@ -26,6 +26,13 @@
           <control type="toggle"/>
         </setting>
       </group>
+      <group id="3">
+        <setting id="installNode" type="boolean" label="30007" help="30008">
+          <level>0</level>
+          <default>true</default>
+          <control type="toggle"/>
+        </setting>
+      </group>
     </category>
   </section>
 </settings>

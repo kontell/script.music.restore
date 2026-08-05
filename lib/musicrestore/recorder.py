@@ -31,7 +31,7 @@ from typing import Any, Deque, Dict, List, Optional
 
 import xbmc
 
-from . import history, jsonrpc, logging as log, restore, settings
+from . import history, jsonrpc, librarynode, logging as log, restore, settings
 from .model import QueueRecord, Track
 
 MUSIC_PLAYLIST = 0
@@ -97,6 +97,7 @@ class Recorder(xbmc.Monitor):
     def onSettingsChanged(self) -> None:
         self._keep = settings.keep()
         log.debug("keeping %d queue(s)", self._keep)
+        librarynode.sync(settings.install_node())
 
     # ------------------------------------------------------------------ Kodi
 
@@ -272,6 +273,11 @@ class Recorder(xbmc.Monitor):
     # ----------------------------------------------------------------- loop
 
     def run(self) -> None:
+        # The library node is what puts "Recent queues" in a skin's music row.
+        # Done from the service so it survives a reinstall and follows the
+        # setting, rather than being a one-off at install time.
+        librarynode.sync(settings.install_node())
+
         # A service restart (an addon enable/disable bounce) can land while
         # music is playing, so adopt whatever is already queued.
         self._refresh()
