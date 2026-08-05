@@ -26,6 +26,18 @@
           <control type="toggle"/>
         </setting>
       </group>
+      <group id="3">
+        <setting id="skinButtonAdd" type="action" label="30015" help="30016">
+          <level>0</level>
+          <data>RunScript(script.music.restore, skin_button=add)</data>
+          <control type="button" format="action"/>
+        </setting>
+        <setting id="skinButtonRemove" type="action" label="30017" help="30018">
+          <level>0</level>
+          <data>RunScript(script.music.restore, skin_button=remove)</data>
+          <control type="button" format="action"/>
+        </setting>
+      </group>
     </category>
   </section>
 </settings>

@@ -51,6 +51,59 @@ msgctxt "#30013"
 msgid "Restoring"
 msgstr ""
 
+# The skin-edit buttons in the settings and their outcome dialogs.
+msgctxt "#30015"
+msgid "Add the button to the skin's home screen"
+msgstr ""
+
+msgctxt "#30016"
+msgid "Edits the running skin so the music categories row gets a Recent queues button that opens the pop-up, with no window change. Estuary and Contuary are supported. A skin update wipes the edit; run this again to put the button back."
+msgstr ""
+
+msgctxt "#30017"
+msgid "Take the button out of the skin again"
+msgstr ""
+
+msgctxt "#30018"
+msgid "Undoes the edit, leaving the skin's files as shipped."
+msgstr ""
+
+msgctxt "#30019"
+msgid "The Recent queues button is now on the music categories row."
+msgstr ""
+
+msgctxt "#30020"
+msgid "The button is already in place."
+msgstr ""
+
+msgctxt "#30021"
+msgid "The running skin is not one this can edit. Estuary and Contuary are supported."
+msgstr ""
+
+msgctxt "#30022"
+msgid "The skin's files do not look as expected, so nothing was changed. A skin update may have moved the places this edit anchors to."
+msgstr ""
+
+msgctxt "#30023"
+msgid "The skin could not be edited: {0}"
+msgstr ""
+
+msgctxt "#30024"
+msgid "The button was taken out of the skin."
+msgstr ""
+
+msgctxt "#30025"
+msgid "There was no button to take out."
+msgstr ""
+
+msgctxt "#30026"
+msgid "Kodi's own copy of the skin is read-only, so an editable copy was placed in your user add-ons and the button added there. Kodi now uses that copy; a Kodi upgrade with a newer skin returns to the original — and to no button."
+msgstr ""
+
+msgctxt "#30027"
+msgid "A skin update removes the button; if it disappears, run this again."
+msgstr ""
+
 # Row titles. {0}/{1} are substituted by the addon.
 msgctxt "#30030"
 msgid "{0} — {1}"
