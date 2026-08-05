@@ -30,7 +30,6 @@ from collections import deque
 from typing import Any, Deque, Dict, List, Optional
 
 import xbmc
-import xbmcgui
 
 from . import history, jsonrpc, logging as log, restore, settings
 from .model import QueueRecord, Track
@@ -52,7 +51,6 @@ SNAPSHOT_PROPERTIES = [
 POLL_INTERVAL = 0.5  # main loop
 SAMPLE_EVERY = 2  # sample the player every other poll, so ~1s
 REFRESH_DELAY = 0.25  # debounce after an Add/Remove burst
-REPUBLISH_EVERY = 20  # re-assert the count property every ~10s
 
 # Kodi fires Player.OnStop for the outgoing track on *every* track change, not
 # only when the queue dies — skipping to the next track, or a track simply
@@ -60,12 +58,6 @@ REPUBLISH_EVERY = 20  # re-assert the count property every ~10s
 # only acted on if audio has not come back by then. Measured gap between
 # OnStop and the following OnPlay: about 10 ms, so this is generous.
 STOP_GRACE = 1.5
-
-# Home-window property the skin reads to hide its button when there is nothing
-# to restore. The widget item is the addon's only visible trace, so it should
-# not sit there promising an empty list.
-COUNT_PROPERTY = "MusicRestore.Count"
-HOME_WINDOW = 10000
 
 # How long to let Kodi finish starting before a startup restore. Generous:
 # arriving late is harmless, arriving before the skin is up is not.
@@ -101,7 +93,6 @@ class Recorder(xbmc.Monitor):
         # after Kodi has deregistered the addon, and constructing an Addon then
         # throws "Unknown addon id". Refreshed by onSettingsChanged.
         self._keep = settings.keep()
-        self._count = 0
 
     def onSettingsChanged(self) -> None:
         self._keep = settings.keep()
@@ -259,30 +250,8 @@ class Recorder(xbmc.Monitor):
 
     def _drain(self) -> None:
         """Write anything captured. Runs on the service thread."""
-        wrote = False
         while self._pending:
-            record = self._pending.popleft()
-            if history.add(record, self._keep):
-                wrote = True
-        if wrote:
-            self._publish_count()
-
-    def _publish_count(self, recount: bool = True) -> None:
-        """Tell the skin how many queues there are.
-
-        The widget button is the addon's only visible trace, and this property
-        is its sole visibility gate, so it is re-asserted on a timer as well as
-        after every write. The property is cheap to set and survives a skin
-        reload, but the home window is rebuilt on things like a profile switch,
-        and a button that has quietly vanished is not a failure anyone would
-        think to look for.
-        """
-        if recount:
-            self._count = history.count()
-        try:
-            xbmcgui.Window(HOME_WINDOW).setProperty(COUNT_PROPERTY, str(self._count))
-        except Exception as exc:  # noqa: BLE001
-            log.error("could not publish %s: %s", COUNT_PROPERTY, exc)
+            history.add(self._pending.popleft(), self._keep)
 
     # -------------------------------------------------------------- startup
 
@@ -306,7 +275,6 @@ class Recorder(xbmc.Monitor):
         # A service restart (an addon enable/disable bounce) can land while
         # music is playing, so adopt whatever is already queued.
         self._refresh()
-        self._publish_count()
 
         if settings.restore_on_startup():
             self._restore_on_startup()
@@ -320,8 +288,6 @@ class Recorder(xbmc.Monitor):
             self._settle_stop()
             if ticks % SAMPLE_EVERY == 0:
                 self._sample()
-            if ticks % REPUBLISH_EVERY == 0:
-                self._publish_count(recount=False)
             self._drain()
 
         # Kodi is going down and the queue goes with it. Usually already done

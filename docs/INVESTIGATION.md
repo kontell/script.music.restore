@@ -324,22 +324,21 @@ is exposed through `xbmcgui.Dialog().select()`, whose only parameters are
 trailing "Settings…" row in the list — pollutes every restore interaction to
 save one trip to the add-on browser for three toggles set once. Not worth it.
 
-**Empty state.** The widget button is now the only visible trace of the add-on,
-so it should hide when there is nothing to restore. The service can publish a
-count on the home window:
+**Empty state — tried and reverted.** The button is the add-on's only visible
+trace, so hiding it while the history is empty looked like the polite thing to
+do: the service published a count on the home window, and the skin item gated
+on it.
 
-```python
-xbmcgui.Window(10000).setProperty("MusicRestore.Count", str(len(history)))
-```
+It does not survive contact with a real device. A window property has to be
+re-established every time the window is rebuilt, and on Android that happens
+whenever Kodi is backgrounded — on a Bravia the button appeared once and then
+stayed gone. Re-asserting it on a timer from the service papers over some of
+that and still loses the race after a cold start.
 
-and the skin item conditions on it:
-
-```xml
-<visible>System.AddonIsEnabled(script.music.restore) +
-         !String.IsEqual(Window(Home).Property(MusicRestore.Count),0)</visible>
-```
-
-The same property can feed the label (`Recent queues (7)`) if that's wanted.
+The gate is not worth a class of silent-disappearance bugs. The button is now
+gated on `System.AddonIsEnabled` alone, and the empty case is handled where it
+belongs — the add-on says so itself when opened. It is also a state that only
+exists before the first thing is ever played.
 
 ### 7.3 The rejected alternative — a directory listing with context menus
 
@@ -403,8 +402,7 @@ then at `Home.xml:199`:
     <label>Recent queues</label>
     <onclick>RunScript(script.music.restore)</onclick>
     <thumb>icons/music-history.png</thumb>
-    <visible>System.AddonIsEnabled(script.music.restore) +
-             !String.IsEqual(Window(Home).Property(MusicRestore.Count),0)</visible>
+    <visible>System.AddonIsEnabled(script.music.restore)</visible>
 </item>
 ```
 
