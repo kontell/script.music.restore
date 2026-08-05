@@ -1,0 +1,5 @@
+Kodistubs==21.*
+pytest
+mypy
+black
+tox

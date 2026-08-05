@@ -1,0 +1,7 @@
+[B]0.1.0[/B]
+• First release. Records the music queue every time it is taken away — when a new album or playlist replaces it, when a video interrupts it, when playback is stopped, and when Kodi quits
+• Each entry remembers which track was playing and how far into it, and restores to exactly that point rather than starting the track again
+• Pick from the "Recent queues" list: album and artist, how many tracks and how many unplayed, how long ago it was played and where it stopped
+• Playing the same album twice leaves two entries, and restoring one leaves it on the list, so nothing is lost by choosing the wrong one
+• Reached from the "Recent queues" button in the skin's music row, or by running the add-on
+• Settings for how many queues to keep, whether to restore the last one when Kodi starts, and whether restored queues start playing or wait paused

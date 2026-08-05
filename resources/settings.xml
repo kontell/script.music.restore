@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<settings version="1">
+  <section id="script.music.restore">
+    <category id="general" label="30000" help="">
+      <group id="1">
+        <setting id="keep" type="integer" label="30001" help="30002">
+          <level>0</level>
+          <default>20</default>
+          <constraints>
+            <minimum>5</minimum>
+            <step>5</step>
+            <maximum>100</maximum>
+          </constraints>
+          <control type="slider" format="integer"/>
+        </setting>
+      </group>
+      <group id="2">
+        <setting id="restoreOnStartup" type="boolean" label="30003" help="30004">
+          <level>0</level>
+          <default>false</default>
+          <control type="toggle"/>
+        </setting>
+        <setting id="startPaused" type="boolean" label="30005" help="30006">
+          <level>0</level>
+          <default>false</default>
+          <control type="toggle"/>
+        </setting>
+      </group>
+    </category>
+  </section>
+</settings>

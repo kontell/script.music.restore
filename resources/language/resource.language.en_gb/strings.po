@@ -1,0 +1,110 @@
+# Kodi Media Center language file
+# Addon Name: Restore Music Queue
+# Addon id: script.music.restore
+# Addon Provider: kontell
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: en_GB\n"
+
+msgctxt "#30000"
+msgid "General"
+msgstr ""
+
+msgctxt "#30001"
+msgid "Queues to keep"
+msgstr ""
+
+msgctxt "#30002"
+msgid "How many recent queues the list holds. The oldest drops off once the list is full.[CR][CR]Restoring a queue does not take it off the list, and playing the same album twice leaves two entries, so the list fills faster than the number of different albums you play."
+msgstr ""
+
+msgctxt "#30003"
+msgid "Restore the last queue when Kodi starts"
+msgstr ""
+
+msgctxt "#30004"
+msgid "Bring the most recent queue back automatically, once Kodi has finished starting. Leave this off to choose from the list yourself."
+msgstr ""
+
+msgctxt "#30005"
+msgid "Start restored queues paused"
+msgstr ""
+
+msgctxt "#30006"
+msgid "Load a restored queue on the right track at the right second, but wait for you to press play. Off by default, so restoring picks up where you left off straight away."
+msgstr ""
+
+msgctxt "#30010"
+msgid "Recent queues"
+msgstr ""
+
+msgctxt "#30011"
+msgid "Recent queues"
+msgstr ""
+
+msgctxt "#30012"
+msgid "Nothing has been set aside yet. A queue is saved whenever one is replaced, interrupted or stopped."
+msgstr ""
+
+msgctxt "#30013"
+msgid "Restoring"
+msgstr ""
+
+# Row titles. {0}/{1} are substituted by the addon.
+msgctxt "#30030"
+msgid "{0} — {1}"
+msgstr ""
+
+msgctxt "#30031"
+msgid "{0} — {1} tracks"
+msgstr ""
+
+msgctxt "#30032"
+msgid "{0} + {1} more"
+msgstr ""
+
+msgctxt "#30033"
+msgid "{0} tracks"
+msgstr ""
+
+msgctxt "#30034"
+msgid "Track {0} of {1} · {2} unplayed"
+msgstr ""
+
+msgctxt "#30035"
+msgid "{0} · stopped at {1}"
+msgstr ""
+
+# Relative times.
+msgctxt "#30040"
+msgid "just now"
+msgstr ""
+
+msgctxt "#30041"
+msgid "a minute ago"
+msgstr ""
+
+msgctxt "#30042"
+msgid "{0} minutes ago"
+msgstr ""
+
+msgctxt "#30043"
+msgid "an hour ago"
+msgstr ""
+
+msgctxt "#30044"
+msgid "{0} hours ago"
+msgstr ""
+
+msgctxt "#30045"
+msgid "yesterday"
+msgstr ""
+
+msgctxt "#30046"
+msgid "{0} days ago"
+msgstr ""
+
+msgctxt "#30047"
+msgid "{0} weeks ago"
+msgstr ""
