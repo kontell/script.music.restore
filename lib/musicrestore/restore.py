@@ -66,8 +66,17 @@ def _pause_once_playing() -> None:
     log.error("gave up waiting for playback to start; not pausing")
 
 
-def restore(record: QueueRecord, start_paused: bool = False) -> bool:
-    """Load a recorded queue and start it where it left off."""
+def restore(
+    record: QueueRecord,
+    start_paused: bool = False,
+    from_track_start: bool = False,
+) -> bool:
+    """Load a recorded queue and start it where it left off.
+
+    ``from_track_start`` keeps the track but drops the offset, so the resume
+    track plays from 0:00 — for when the last seconds heard are worth hearing
+    again rather than skipping past.
+    """
     tracks: List[Track] = [track for track in record.tracks if track.file]
     if not tracks:
         log.error("nothing playable in this record")
@@ -79,15 +88,16 @@ def restore(record: QueueRecord, start_paused: bool = False) -> bool:
     playlist.clear()
     for index, track in enumerate(tracks):
         item = _list_item(track)
-        if index == position and record.tick >= MIN_OFFSET:
+        if index == position and record.tick >= MIN_OFFSET and not from_track_start:
             item.setProperty("StartOffset", str(record.tick))
         playlist.add(track.file, item)
 
     log.info(
-        "restoring %d track(s) from position %d at %.0fs%s",
+        "restoring %d track(s) from position %d at %.0fs%s%s",
         len(tracks),
         position,
-        record.tick,
+        0.0 if from_track_start else record.tick,
+        " (from the start of the track)" if from_track_start else "",
         " (paused)" if start_paused else "",
     )
     xbmc.Player().play(playlist, startpos=position)

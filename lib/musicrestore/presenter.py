@@ -14,14 +14,15 @@ import xbmcgui
 from . import history, naming, restore, settings
 from .model import QueueRecord
 
-HEADING = 30010
-EMPTY_HEADING = 30011
+# 30010 is the button's label and stays "Recent queues" — the skin references it
+# by id. What the dialog itself is called is a separate string, because the row
+# you are looking at is named for what picking it does.
+HEADING = 30011
 EMPTY_BODY = 30012
 RESTORING = 30013
 
 FALLBACK = {
-    HEADING: "Recent queues",
-    EMPTY_HEADING: "Recent queues",
+    HEADING: "Restore queue",
     EMPTY_BODY: "Nothing has been set aside yet. A queue is saved whenever one is replaced, interrupted or stopped.",
     RESTORING: "Restoring",
 }
@@ -46,7 +47,7 @@ def show() -> None:
     """Offer the recorded queues; restore whichever is chosen."""
     records = history.load()
     if not records:
-        xbmcgui.Dialog().ok(_text(EMPTY_HEADING), _text(EMPTY_BODY))
+        xbmcgui.Dialog().ok(_text(HEADING), _text(EMPTY_BODY))
         return
 
     # Kodi's select() takes strings or ListItems; the annotation has to be the
@@ -57,13 +58,17 @@ def show() -> None:
         return
 
     record = records[chosen]
+    # The addon's own icon rather than NOTIFICATION_INFO's generic "i": the
+    # toast is this addon speaking, and the mark is the one on the button that
+    # opened the dialog. Falls back to the stock icon if the path comes back
+    # empty, since notification() renders nothing for an empty string.
     xbmcgui.Dialog().notification(
         _text(RESTORING),
         naming.queue_title(record, settings.localised),
-        xbmcgui.NOTIFICATION_INFO,
+        settings.icon() or xbmcgui.NOTIFICATION_INFO,
         2000,
     )
     # Restoring deliberately leaves the entry in place: the history is a log of
     # every time a queue was taken away, not a set of distinct queues. The
     # restored queue is captured again, as a new row, the next time it goes.
-    restore.restore(record, settings.start_paused())
+    restore.restore(record, settings.start_paused(), settings.from_track_start())
