@@ -2,7 +2,7 @@
 
 A Kodi add-on that keeps a list of stopped music queues, allowing you to restore music playback to a previous state. Inspired by the Finamp Restore Now Playing feature.
 
-Kodi throws a music queue away without ceremony. Start an album while another is playing and the first one is gone. Start a video and the tracks survive but Kodi forgets where you were. Quit and everything goes. This records each of those moments and offers them back.
+Kodi throws a music queue away without memory. Start an album while another is playing and the first one is gone. Start a video and the tracks survive but Kodi forgets where you were. Quit and everything goes. This records each of those moments and offers them back.
 
 ## Installation
 
