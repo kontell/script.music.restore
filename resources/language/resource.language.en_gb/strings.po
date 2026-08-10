@@ -16,7 +16,7 @@ msgid "Queues to keep"
 msgstr ""
 
 msgctxt "#30002"
-msgid "How many recent queues the list holds. The oldest drops off once the list is full.[CR][CR]Restoring a queue does not take it off the list, and playing the same album twice leaves two entries, so the list fills faster than the number of different albums you play."
+msgid "How many recent queues the list holds. The oldest drops off once the list is full. Restoring a queue does not take it off the list, and playing the same album twice leaves two entries, so the list fills faster than the number of different albums you play."
 msgstr ""
 
 msgctxt "#30003"
@@ -35,12 +35,22 @@ msgctxt "#30006"
 msgid "Load a restored queue on the right track at the right second, but wait for you to press play. Off by default, so restoring picks up where you left off straight away."
 msgstr ""
 
+msgctxt "#30007"
+msgid "Restore from the start of the track"
+msgstr ""
+
+msgctxt "#30008"
+msgid "Go back to the right track but play it from the beginning, instead of the second it was interrupted at. Off by default, so restoring picks up mid-track where you left off."
+msgstr ""
+
+# 30010 is the button label. skin.contuary renders it by id, as $ADDON[script.music.restore 30010] — changing the wording changes the button.
 msgctxt "#30010"
 msgid "Recent queues"
 msgstr ""
 
+# 30011 is what the dialog that button opens is called.
 msgctxt "#30011"
-msgid "Recent queues"
+msgid "Restore queue"
 msgstr ""
 
 msgctxt "#30012"
@@ -49,59 +59,6 @@ msgstr ""
 
 msgctxt "#30013"
 msgid "Restoring"
-msgstr ""
-
-# The skin-edit buttons in the settings and their outcome dialogs.
-msgctxt "#30015"
-msgid "Add the button to the skin's home screen"
-msgstr ""
-
-msgctxt "#30016"
-msgid "Edits the running skin so the music categories row gets a Recent queues button that opens the pop-up, with no window change. Estuary and Contuary are supported. A skin update wipes the edit; run this again to put the button back."
-msgstr ""
-
-msgctxt "#30017"
-msgid "Take the button out of the skin again"
-msgstr ""
-
-msgctxt "#30018"
-msgid "Undoes the edit, leaving the skin's files as shipped."
-msgstr ""
-
-msgctxt "#30019"
-msgid "The Recent queues button is now on the music categories row."
-msgstr ""
-
-msgctxt "#30020"
-msgid "The button is already in place."
-msgstr ""
-
-msgctxt "#30021"
-msgid "The running skin is not one this can edit. Estuary and Contuary are supported."
-msgstr ""
-
-msgctxt "#30022"
-msgid "The skin's files do not look as expected, so nothing was changed. A skin update may have moved the places this edit anchors to."
-msgstr ""
-
-msgctxt "#30023"
-msgid "The skin could not be edited: {0}"
-msgstr ""
-
-msgctxt "#30024"
-msgid "The button was taken out of the skin."
-msgstr ""
-
-msgctxt "#30025"
-msgid "There was no button to take out."
-msgstr ""
-
-msgctxt "#30026"
-msgid "Kodi's own copy of the skin is read-only, so an editable copy was placed in your user add-ons and the button added there. Kodi now uses that copy; a Kodi upgrade with a newer skin returns to the original — and to no button."
-msgstr ""
-
-msgctxt "#30027"
-msgid "A skin update removes the button; if it disappears, run this again."
 msgstr ""
 
 # Row titles. {0}/{1} are substituted by the addon.

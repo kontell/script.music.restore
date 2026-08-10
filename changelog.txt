@@ -1,3 +1,11 @@
+v0.3.0
+• The "Recent queues" button is now part of Contuary itself, which shows it on the music row whenever this add-on is enabled. Nothing to switch on, and a skin update no longer takes it away
+• The two settings buttons that edited the skin are gone, along with the editing itself. Running an older version's edit is undone by updating Contuary
+• Stock Estuary no longer gets the button. Run the add-on from Add-ons → Program add-ons instead
+• New "Restore from the start of the track" setting: go back to the right track but play it from the beginning rather than the second it was interrupted at. Off by default
+• The pop-up is now called "Restore queue", after what picking a row does. The button is still "Recent queues"
+• The restoring notification carries the add-on's own icon instead of a generic information symbol, and the icon is now the button's mark
+
 v0.2.0
 • The "Recent queues" button can now be placed on the skin's home screen from the add-on settings: the running skin is edited so its music categories row gets a button that opens the pop-up directly, with no window change
 • Estuary and Contuary are supported. The edit is reversible from the same settings page, and a skin update that wipes it is put right by running it again

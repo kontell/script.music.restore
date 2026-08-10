@@ -267,7 +267,9 @@ class Recorder(xbmc.Monitor):
         if not records:
             return
         log.info("restoring the newest queue on startup")
-        restore.restore(records[0], settings.start_paused())
+        restore.restore(
+            records[0], settings.start_paused(), settings.from_track_start()
+        )
 
     # ----------------------------------------------------------------- loop
 

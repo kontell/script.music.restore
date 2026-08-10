@@ -45,5 +45,21 @@ def start_paused() -> bool:
         return False
 
 
+def from_track_start() -> bool:
+    """Start the resume track at 0:00 rather than where it was interrupted."""
+    try:
+        return bool(_addon().getSettingBool("fromTrackStart"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def icon() -> str:
+    """Full path to the addon's declared icon, for the restore toast."""
+    try:
+        return str(_addon().getAddonInfo("icon"))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def localised(string_id: int) -> str:
     return str(_addon().getLocalizedString(string_id))
