@@ -10,7 +10,7 @@ In [Contuary](https://github.com/kontell/skin.contuary), there's a button in the
 
 Otherwise run it from Add-ons -> Program add-ons. Both open the same pop-up.
 
-![Screenshot 1](resources/screenshot.jpg)
+![Screenshot 1](docs/screenshot-01.png)
 
 ### Settings
 
@@ -39,8 +39,6 @@ History lives at
 `special://profile/addon_data/script.music.restore/queues.json`
 
 ## Adding button to Estuary
-
-Contuary ships the button. Stock Estuary does not, and this add-on no longer edits skins to put it there — so on Estuary it is four edits by hand, all in the skin's own `xml/` directory.
 
 If Kodi's copy of Estuary is read-only (the usual case on Linux, under `special://xbmc/addons/`), copy the whole `skin.estuary` directory to `special://home/addons/` first and edit the copy. Kodi scans the home directory last and a later find wins at equal versions, so the copy shadows the bundled skin — and a Kodi upgrade shipping a newer Estuary out-versions it, which takes the button away again.
 
@@ -78,6 +76,4 @@ then, after the whole `TVShowSubmenuItems` include ends, the include itself:
 ```
 
 Then `ReloadSkin()`, or restart Kodi. The button appears at the head of the music categories row.
-
-The `<onclick>` is the point of all this: everything an add-on feeds into `library://music/` arrives as a folder, and Kodi's default action for a folder widget item is `ActivateWindow`. Only skin XML can override that, which is why the pop-up cannot be opened from a plain library node.
 
