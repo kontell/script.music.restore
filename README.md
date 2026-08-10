@@ -4,6 +4,10 @@ A Kodi add-on that keeps a list of stopped music queues, allowing you to restore
 
 Kodi throws a music queue away without ceremony. Start an album while another is playing and the first one is gone. Start a video and the tracks survive but Kodi forgets where you were. Quit and everything goes. This records each of those moments and offers them back.
 
+## Installation
+
+Install via the [Kontell Repository](https://github.com/kontell/repository.kontell).
+
 ## Usage
 
 In [Contuary](https://github.com/kontell/skin.contuary), there's a button in the categories row of the music main menu section.
