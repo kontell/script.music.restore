@@ -20,6 +20,7 @@ TITLE_FIRST_PLUS_MORE = 30032
 TITLE_BARE_TRACKS = 30033
 LINE_TRACK_COUNTS = 30034
 LINE_STOPPED_AT = 30035
+LINE_PLAYED_THROUGH = 30036
 AGO_JUST_NOW = 30040
 AGO_A_MINUTE = 30041
 AGO_MINUTES = 30042
@@ -36,6 +37,7 @@ FALLBACK = {
     TITLE_BARE_TRACKS: "{0} tracks",
     LINE_TRACK_COUNTS: "Track {0} of {1} · {2} unplayed",
     LINE_STOPPED_AT: "{0} · stopped at {1}",
+    LINE_PLAYED_THROUGH: "Played through",
     AGO_JUST_NOW: "just now",
     AGO_A_MINUTE: "a minute ago",
     AGO_MINUTES: "{0} minutes ago",
@@ -89,12 +91,16 @@ def queue_title(record: QueueRecord, tr: Optional[Translator] = None) -> str:
     if len(artists) == 1 and all(track.artist for track in record.tracks):
         return _resolve(tr, TITLE_ARTIST_TRACKS).format(artists[0], record.total)
 
-    # A mixture. Lead with the first track, which is what the listener started.
-    first = record.tracks[0].title
-    if first:
+    # A mixture. Name it for the track that was playing when it stopped —
+    # that is what the listener will hear if they pick this row. Fall back
+    # to the first track only when the saved position is out of range.
+    playing = record.current or record.tracks[0]
+    if playing.title:
         if record.total == 1:
-            return first
-        return _resolve(tr, TITLE_FIRST_PLUS_MORE).format(first, record.total - 1)
+            return playing.title
+        return _resolve(tr, TITLE_FIRST_PLUS_MORE).format(
+            playing.title, record.total - 1
+        )
 
     return _resolve(tr, TITLE_BARE_TRACKS).format(record.total)
 
@@ -146,10 +152,14 @@ def queue_detail(
     draws as a wrapping textbox — so the newline is honoured rather than
     truncated.
     """
+    ago = time_ago(record.saved, now, tr)
+    if record.finished:
+        # Restore starts this row at the beginning, so "Track N of N ·
+        # stopped at 3:45" would describe a point we will not return to.
+        return "%s[CR]%s" % (_resolve(tr, LINE_PLAYED_THROUGH), ago)
     counts = _resolve(tr, LINE_TRACK_COUNTS).format(
         record.position + 1, record.total, record.unplayed
     )
-    ago = time_ago(record.saved, now, tr)
     # Under a second in means the track had barely started; a "stopped at 0:00"
     # is noise, so the second line is just the age.
     if record.tick >= 1.0:

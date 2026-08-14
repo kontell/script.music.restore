@@ -1,3 +1,9 @@
+v0.3.1
+• A queue that played through to the end restores from the first track, not the last second of the last one
+• A mixed playlist is named for the track that was playing when it stopped, not the first track in the list
+• The restore pop-up opens faster: one Addon handle for the whole list, offscreen ListItems, and the script interpreter is reused between opens
+• After a kofin library repair, restore looks each song up by the Jellyfin id in its URL so Now Playing still names the tracks you actually saved, not whoever reused the old Kodi song ids
+
 v0.3.0
 • The "Recent queues" button is now part of Contuary itself, which shows it on the music row whenever this add-on is enabled. Nothing to switch on, and a skin update no longer takes it away
 • The two settings buttons that edited the skin are gone, along with the editing itself. Running an older version's edit is undone by updating Contuary

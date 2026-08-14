@@ -14,13 +14,13 @@ beginning that a play-then-seek gives.
 """
 
 import time
-from typing import List
+from typing import List, Union
 
 import xbmc
 import xbmcgui
 
-from . import jsonrpc, logging as log
-from .model import QueueRecord, Track
+from . import jsonrpc, logging as log, rebind
+from .model import QueueRecord, Track, playback_start
 
 MUSIC_PLAYLIST = 0
 
@@ -33,7 +33,7 @@ PAUSE_STEP = 100  # ms
 
 
 def _list_item(track: Track) -> xbmcgui.ListItem:
-    item = xbmcgui.ListItem(label=track.title or track.file)
+    item = xbmcgui.ListItem(label=track.title or track.file, offscreen=True)
     item.setPath(track.file)
     tag = item.getMusicInfoTag()
     if track.title:
@@ -51,6 +51,47 @@ def _list_item(track: Track) -> xbmcgui.ListItem:
     if track.thumb:
         item.setArt({"thumb": track.thumb, "icon": track.thumb})
     return item
+
+
+def _lookup_library_song(
+    jellyfin_id: str,
+) -> Union[dict, None, object]:
+    """The current library row for a Jellyfin audio id, or None if it is gone.
+
+    Filters on path: Kodi stores the host URL in ``path.strPath`` and the
+    ``stream.*`` leaf in ``song.strFileName``, so a filename filter misses.
+    Verified live — ``field=path, operator=contains`` returns the one song.
+    """
+    result = jsonrpc.call(
+        "AudioLibrary.GetSongs",
+        filter={"field": "path", "operator": "contains", "value": jellyfin_id},
+        properties=[
+            "file",
+            "title",
+            "artist",
+            "albumartist",
+            "album",
+            "duration",
+            "thumbnail",
+        ],
+        limits={"end": 1},
+    )
+    if result is None:
+        return rebind.LOOKUP_FAILED
+    songs = result.get("songs") or []
+    return songs[0] if songs else None
+
+
+def _rebind(track: Track) -> Track:
+    rebound = rebind.rebind_track(track, _lookup_library_song)
+    if rebound.songid != track.songid:
+        log.info(
+            "rebound %s songid %s -> %s",
+            rebound.title or rebound.file,
+            track.songid,
+            rebound.songid,
+        )
+    return rebound
 
 
 def _pause_once_playing() -> None:
@@ -77,27 +118,33 @@ def restore(
     track plays from 0:00 — for when the last seconds heard are worth hearing
     again rather than skipping past.
     """
-    tracks: List[Track] = [track for track in record.tracks if track.file]
+    tracks: List[Track] = [_rebind(track) for track in record.tracks if track.file]
     if not tracks:
         log.error("nothing playable in this record")
         return False
 
-    position = record.position if 0 <= record.position < len(tracks) else 0
+    position, tick = playback_start(record, from_track_start)
+    if position >= len(tracks):
+        position, tick = 0, 0.0
 
     playlist = xbmc.PlayList(MUSIC_PLAYLIST)
     playlist.clear()
     for index, track in enumerate(tracks):
         item = _list_item(track)
-        if index == position and record.tick >= MIN_OFFSET and not from_track_start:
-            item.setProperty("StartOffset", str(record.tick))
+        if index == position and tick >= MIN_OFFSET:
+            item.setProperty("StartOffset", str(tick))
         playlist.add(track.file, item)
 
     log.info(
         "restoring %d track(s) from position %d at %.0fs%s%s",
         len(tracks),
         position,
-        0.0 if from_track_start else record.tick,
-        " (from the start of the track)" if from_track_start else "",
+        tick,
+        (
+            " (from the start of the track)"
+            if from_track_start and not record.finished
+            else ""
+        ),
         " (paused)" if start_paused else "",
     )
     xbmc.Player().play(playlist, startpos=position)

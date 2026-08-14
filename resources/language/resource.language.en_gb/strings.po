@@ -86,6 +86,10 @@ msgctxt "#30035"
 msgid "{0} · stopped at {1}"
 msgstr ""
 
+msgctxt "#30036"
+msgid "Played through"
+msgstr ""
+
 # Relative times.
 msgctxt "#30040"
 msgid "just now"

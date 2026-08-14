@@ -46,13 +46,25 @@ class TestQueueTitle:
         )
         assert queue_title(record) == "AC/DC — 3 tracks"
 
-    def test_mixture_leads_with_the_first_track(self):
+    def test_mixture_leads_with_the_playing_track(self):
         record = QueueRecord(
             tracks=[
                 track("Hells Bells", "AC/DC", "Back in Black"),
                 track("Debaser", "Pixies", "Doolittle"),
                 track("Blue Monday", "New Order", "Substance"),
-            ]
+            ],
+            position=1,
+        )
+        assert queue_title(record) == "Debaser + 2 more"
+
+    def test_mixture_falls_back_to_the_first_track_when_position_is_bad(self):
+        record = QueueRecord(
+            tracks=[
+                track("Hells Bells", "AC/DC", "Back in Black"),
+                track("Debaser", "Pixies", "Doolittle"),
+                track("Blue Monday", "New Order", "Substance"),
+            ],
+            position=99,
         )
         assert queue_title(record) == "Hells Bells + 2 more"
 
@@ -155,3 +167,13 @@ class TestQueueDetail:
 
     def test_the_line_break_is_kodi_markup(self):
         assert "[CR]" in queue_detail(self._record(), now=2 * HOUR)
+
+    def test_a_finished_queue_says_played_through(self):
+        record = self._record(position=9, tick=180.0)
+        record.completed = True
+        assert queue_detail(record, now=2 * HOUR) == "Played through[CR]2 hours ago"
+
+    def test_a_last_track_near_its_end_is_treated_as_finished(self):
+        record = self._record(position=9, tick=179.0)
+        record.tracks[9].duration = 180
+        assert queue_detail(record, now=2 * HOUR) == "Played through[CR]2 hours ago"

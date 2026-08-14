@@ -11,6 +11,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 SCHEMA_VERSION = 1
 
+# A record captured before we stored ``completed`` still counts as finished
+# when it was left on the last track, within this many seconds of the end.
+FINISHED_SLOP = 2.0
+
 
 @dataclass
 class Track:
@@ -89,6 +93,7 @@ class QueueRecord:
     position: int = 0
     tick: float = 0.0
     saved: float = 0.0
+    completed: bool = False
 
     @property
     def total(self) -> int:
@@ -106,17 +111,39 @@ class QueueRecord:
         return None
 
     @property
+    def finished(self) -> bool:
+        """True if this queue played through rather than being interrupted.
+
+        New captures set ``completed`` when ``Player.OnStop`` arrives with
+        ``end: true`` on the last track. Older rows have no flag, so a last
+        track left within ``FINISHED_SLOP`` seconds of its duration is treated
+        the same — otherwise restoring one starts at the last second of the
+        last track and it ends again immediately.
+        """
+        if self.completed:
+            return True
+        if self.unplayed > 0:
+            return False
+        current = self.current
+        if current is None or not current.duration:
+            return False
+        return self.tick >= max(0.0, float(current.duration) - FINISHED_SLOP)
+
+    @property
     def signature(self) -> Tuple[str, ...]:
         """Track identity of the queue, ignoring where playback had got to."""
         return tuple(track.key for track in self.tracks)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data: Dict[str, Any] = {
             "saved": round(self.saved, 3),
             "position": self.position,
             "tick": round(self.tick, 3),
             "tracks": [track.to_dict() for track in self.tracks],
         }
+        if self.completed:
+            data["completed"] = True
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "QueueRecord":
@@ -126,4 +153,21 @@ class QueueRecord:
             position=int(data.get("position", 0) or 0),
             tick=float(data.get("tick", 0.0) or 0.0),
             saved=float(data.get("saved", 0.0) or 0.0),
+            completed=bool(data.get("completed")),
         )
+
+
+def playback_start(
+    record: QueueRecord, from_track_start: bool = False
+) -> Tuple[int, float]:
+    """Where a restore should begin: ``(position, tick)``.
+
+    A finished queue starts at the first track, 0:00 — not the last second of
+    the last track, which is where the capture actually sat. ``from_track_start``
+    keeps the track and drops only the offset.
+    """
+    if record.finished:
+        return 0, 0.0
+    position = record.position if 0 <= record.position < record.total else 0
+    tick = 0.0 if from_track_start else max(0.0, record.tick)
+    return position, tick
