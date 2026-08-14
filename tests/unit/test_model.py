@@ -1,6 +1,6 @@
 """Track / QueueRecord: round-tripping and the fields the recorder relies on."""
 
-from musicrestore.model import QueueRecord, Track
+from musicrestore.model import QueueRecord, Track, playback_start
 
 
 class TestTrackFromPlaylistItem:
@@ -89,6 +89,21 @@ class TestRoundTrip:
         )
         assert QueueRecord.from_dict(record.to_dict()) == record
 
+    def test_completed_is_omitted_when_false(self):
+        data = QueueRecord(tracks=[Track(file="/a.flac")]).to_dict()
+        assert "completed" not in data
+
+    def test_completed_survives_serialisation(self):
+        record = QueueRecord(
+            tracks=[Track(file="/a.flac"), Track(file="/b.flac")],
+            position=1,
+            tick=90.0,
+            completed=True,
+        )
+        loaded = QueueRecord.from_dict(record.to_dict())
+        assert loaded.completed is True
+        assert loaded.finished is True
+
     def test_a_record_with_junk_in_it_still_loads(self):
         record = QueueRecord.from_dict(
             {"tracks": [{"file": "/a.flac"}, "not a dict", 7], "position": "2"}
@@ -118,3 +133,54 @@ class TestDerivedFields:
         first = QueueRecord(tracks=list(tracks), position=0, tick=0.0)
         second = QueueRecord(tracks=list(tracks), position=1, tick=99.0)
         assert first.signature == second.signature == ("song:1", "file:/b.flac")
+
+    def test_finished_is_false_when_there_are_unplayed_tracks(self):
+        record = QueueRecord(
+            tracks=[Track(file="/a.flac", duration=100), Track(file="/b.flac")],
+            position=0,
+            tick=99.0,
+        )
+        assert record.finished is False
+
+    def test_finished_without_a_flag_needs_the_last_track_near_its_end(self):
+        last = Track(file="/b.flac", duration=180)
+        record = QueueRecord(
+            tracks=[Track(file="/a.flac", duration=100), last],
+            position=1,
+            tick=178.5,
+        )
+        assert record.finished is True
+        record.tick = 10.0
+        assert record.finished is False
+
+
+class TestPlaybackStart:
+    def _album(self, **kwargs) -> QueueRecord:
+        tracks = [
+            Track(file="/a.flac", duration=100),
+            Track(file="/b.flac", duration=180),
+        ]
+        return QueueRecord(tracks=tracks, **kwargs)
+
+    def test_an_interrupted_queue_keeps_its_place(self):
+        assert playback_start(self._album(position=1, tick=70.0)) == (1, 70.0)
+
+    def test_from_track_start_zeroes_only_the_tick(self):
+        assert playback_start(self._album(position=1, tick=70.0), True) == (1, 0.0)
+
+    def test_a_completed_flag_starts_at_the_beginning(self):
+        assert playback_start(self._album(position=1, tick=179.0, completed=True)) == (
+            0,
+            0.0,
+        )
+
+    def test_a_legacy_finished_row_starts_at_the_beginning(self):
+        assert playback_start(self._album(position=1, tick=179.0)) == (0, 0.0)
+
+    def test_stop_on_the_last_track_mid_way_is_not_finished(self):
+        assert playback_start(self._album(position=1, tick=10.0)) == (1, 10.0)
+
+    def test_from_track_start_does_not_override_a_finished_queue(self):
+        assert playback_start(
+            self._album(position=1, tick=179.0, completed=True), True
+        ) == (0, 0.0)

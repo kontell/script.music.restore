@@ -5,6 +5,8 @@ Kodi caches an Addon instance's settings from when it was constructed, so a new
 take effect without a service restart.
 """
 
+from typing import Callable, Optional
+
 import xbmcaddon
 
 ADDON_ID = "script.music.restore"
@@ -18,6 +20,24 @@ DEFAULT_KEEP = 20
 
 def _addon() -> xbmcaddon.Addon:
     return xbmcaddon.Addon(ADDON_ID)
+
+
+def addon() -> xbmcaddon.Addon:
+    """A fresh Addon handle. The dialog holds one of these for the whole open."""
+    return _addon()
+
+
+def translator_for(handle: Optional[xbmcaddon.Addon] = None) -> Callable[[int], str]:
+    """A ``getLocalizedString`` bound to one Addon, so a list does not rebuild it."""
+    bound = handle or _addon()
+
+    def translate(string_id: int) -> str:
+        try:
+            return str(bound.getLocalizedString(string_id))
+        except Exception:  # noqa: BLE001
+            return ""
+
+    return translate
 
 
 def keep() -> int:

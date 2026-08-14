@@ -7,10 +7,15 @@ browser.
 
 import os
 import sys
+import time
+
+# Taken before any addon import so the "dialog ready" log includes interpreter
+# startup, not just the work after we are imported.
+_STARTED = time.time()
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 
 from musicrestore import presenter  # noqa: E402
 
 if __name__ == "__main__":
-    presenter.show()
+    presenter.show(started=_STARTED)

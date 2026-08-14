@@ -86,6 +86,10 @@ class Recorder(xbmc.Monitor):
         self._armed = False
         self._refresh_at: Optional[float] = None
         self._stop_at: Optional[float] = None
+        # True when the OnStop we are waiting out was a natural end, not a
+        # user Stop. end:true fires on every track change as well, so this is
+        # only meaningful once the grace period expires with no audio back.
+        self._stop_ended = False
         self._pending: Deque[QueueRecord] = deque()
         self._player = xbmc.Player()
         self._playlist = xbmc.PlayList(MUSIC_PLAYLIST)
@@ -126,6 +130,7 @@ class Recorder(xbmc.Monitor):
                 # This supersedes any stop still in its grace period: the
                 # OnStop that follows a replacement is about the same event.
                 self._stop_at = None
+                self._stop_ended = False
 
         elif method in ("Playlist.OnAdd", "Playlist.OnRemove"):
             if payload.get("playlistid") != MUSIC_PLAYLIST:
@@ -141,8 +146,12 @@ class Recorder(xbmc.Monitor):
                 return
             # Might be the queue dying, might just be the next track starting.
             # Decided in _settle_stop once the grace period is up.
+            # ``end`` is true on every natural track end, not only the last
+            # one — see Application.cpp GUI_MSG_PLAYBACK_ENDED. Combined with
+            # "nothing after this track" it is what marks a finished queue.
             with self._lock:
                 self._stop_at = time.time() + STOP_GRACE
+                self._stop_ended = bool(payload.get("end"))
 
         elif method == "System.OnQuit":
             self._capture("Kodi quitting")
@@ -194,8 +203,10 @@ class Recorder(xbmc.Monitor):
         """
         with self._lock:
             due = self._stop_at is not None and time.time() >= self._stop_at
+            ended = self._stop_ended
             if due:
                 self._stop_at = None
+                self._stop_ended = False
         if not due:
             return
         try:
@@ -203,7 +214,7 @@ class Recorder(xbmc.Monitor):
                 return
         except Exception:  # noqa: BLE001
             pass
-        self._capture("playback stopped")
+        self._capture("playback stopped", ended=ended)
 
     def _sample(self) -> None:
         """Read position and elapsed time off the player. No JSON-RPC."""
@@ -225,26 +236,29 @@ class Recorder(xbmc.Monitor):
 
     # -------------------------------------------------------------- capture
 
-    def _capture(self, reason: str) -> bool:
+    def _capture(self, reason: str, ended: bool = False) -> bool:
         """Copy the shadow onto the pending queue, if it is worth saving."""
         with self._lock:
             if not self._armed or not self._items:
                 return False
+            unplayed = max(0, len(self._items) - self._position - 1)
             record = QueueRecord(
                 tracks=list(self._items),
                 position=self._position,
                 tick=self._tick,
                 saved=time.time(),
+                completed=bool(ended and unplayed == 0),
             )
             self._armed = False
         self._pending.append(record)
         log.info(
-            "captured %d track(s) at %d/%d, %.0fs in (%s)",
+            "captured %d track(s) at %d/%d, %.0fs in (%s)%s",
             record.total,
             record.position + 1,
             record.total,
             record.tick,
             reason,
+            " (completed)" if record.completed else "",
         )
         return True
 
