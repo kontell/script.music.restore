@@ -46,6 +46,10 @@ SNAPSHOT_PROPERTIES = [
     "album",
     "duration",
     "thumbnail",
+    # The flat field rather than the whole "art" map: fanart is the one piece
+    # a restore cannot get back on its own, and asking for "art" would put
+    # fourteen image URLs per track through this call on every queue change.
+    "fanart",
 ]
 
 POLL_INTERVAL = 0.5  # main loop

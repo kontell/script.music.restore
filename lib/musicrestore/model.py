@@ -22,7 +22,14 @@ class Track:
 
     ``file`` is what playback actually uses. ``songid`` is kept alongside it so
     a restored item is recognised as the library song it came from (play counts,
-    art, the info dialog) rather than a loose file.
+    the info dialog) rather than a loose file.
+
+    ``thumb`` and ``fanart`` are stored because a restored item gets exactly the
+    art we put on it and no more — Kodi does not fill library art in for a track
+    that plays from an http(s) URL, songid or not. See ``restore._list_item``.
+    Only those two are kept: the rest of the library's art map is fetched at
+    restore time, and the whole history is parsed to open the dialog, so a row
+    here is not the place for fourteen image URLs per track.
     """
 
     file: str
@@ -32,6 +39,7 @@ class Track:
     duration: int = 0
     songid: Optional[int] = None
     thumb: str = ""
+    fanart: str = ""
 
     @property
     def key(self) -> str:
@@ -40,7 +48,7 @@ class Track:
 
     def to_dict(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {"file": self.file}
-        for name in ("title", "artist", "album", "thumb"):
+        for name in ("title", "artist", "album", "thumb", "fanart"):
             value = getattr(self, name)
             if value:
                 data[name] = value
@@ -60,6 +68,7 @@ class Track:
             duration=int(data.get("duration", 0) or 0),
             songid=data.get("songid") or None,
             thumb=str(data.get("thumb", "")),
+            fanart=str(data.get("fanart", "")),
         )
 
     @classmethod
@@ -72,6 +81,11 @@ class Track:
             return str(value or "")
 
         songid = item.get("id") if item.get("type") == "song" else None
+        # Callers ask for either the flat ``fanart`` field or the whole ``art``
+        # map, depending on how much of it they have a use for. Take whichever
+        # arrived.
+        raw_art = item.get("art")
+        art: Dict[str, Any] = raw_art if isinstance(raw_art, dict) else {}
         return cls(
             file=str(item.get("file", "")),
             title=str(item.get("title") or item.get("label") or ""),
@@ -81,7 +95,8 @@ class Track:
             album=str(item.get("album", "")),
             duration=int(item.get("duration", 0) or 0),
             songid=int(songid) if songid else None,
-            thumb=str(item.get("thumbnail", "")),
+            thumb=str(item.get("thumbnail") or art.get("thumb") or ""),
+            fanart=str(item.get("fanart") or art.get("fanart") or ""),
         )
 
 

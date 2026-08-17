@@ -14,7 +14,7 @@ beginning that a play-then-seek gives.
 """
 
 import time
-from typing import List, Union
+from typing import Dict, List, Tuple, Union
 
 import xbmc
 import xbmcgui
@@ -32,7 +32,7 @@ PAUSE_TIMEOUT = 10.0
 PAUSE_STEP = 100  # ms
 
 
-def _list_item(track: Track) -> xbmcgui.ListItem:
+def _list_item(track: Track, library_art: Dict[str, str]) -> xbmcgui.ListItem:
     item = xbmcgui.ListItem(label=track.title or track.file, offscreen=True)
     item.setPath(track.file)
     tag = item.getMusicInfoTag()
@@ -48,8 +48,24 @@ def _list_item(track: Track) -> xbmcgui.ListItem:
     # like the library song it came from rather than a loose file.
     if track.songid:
         tag.setDbId(track.songid, "song")
+    # The library id does not bring the art with it. ``CMusicGUIInfo::
+    # InitCurrentItem`` only reaches ``CMusicThumbLoader::FillLibraryArt`` —
+    # which is what puts fanart, clearlogo and the artist/album variants on the
+    # playing item — when the item is neither an internet stream nor a
+    # ``musicdb://`` path, and ``IsMusicDb()`` tests the path, not the dbid. A
+    # song streamed over http(s) is therefore left with whatever art we set
+    # here and nothing else. Verified on Kodi 21.3: Player.Art(fanart) was empty
+    # on a restored track whose songid resolved to a song that has fanart.
+    art: Dict[str, str] = dict(library_art)
+    # What the record carries wins, for the same reason it wins in
+    # ``rebind.apply_library_hit``: it is what the history row showed.
     if track.thumb:
-        item.setArt({"thumb": track.thumb, "icon": track.thumb})
+        art["thumb"] = track.thumb
+        art["icon"] = track.thumb
+    if track.fanart:
+        art["fanart"] = track.fanart
+    if art:
+        item.setArt(art)
     return item
 
 
@@ -73,6 +89,10 @@ def _lookup_library_song(
             "album",
             "duration",
             "thumbnail",
+            # The whole map, not just fanart: this is one row, and it is the
+            # only chance to give the restored item clearlogo and the
+            # ``artist.*``/``album.*`` art a skin may ask for by name.
+            "art",
         ],
         limits={"end": 1},
     )
@@ -82,8 +102,23 @@ def _lookup_library_song(
     return songs[0] if songs else None
 
 
-def _rebind(track: Track) -> Track:
-    rebound = rebind.rebind_track(track, _lookup_library_song)
+def _rebind(track: Track) -> Tuple[Track, Dict[str, str]]:
+    """``track`` pointed at the live library row, and that row's art map.
+
+    The art rides along on the lookup ``rebind_track`` is already making, so a
+    restore that finds its songs still in the library costs nothing extra and
+    hands back everything the library knows — not only the fanart the record
+    stored.
+    """
+    hits: List[dict] = []
+
+    def lookup(item_id: str) -> Union[dict, None, object]:
+        hit = _lookup_library_song(item_id)
+        if isinstance(hit, dict):
+            hits.append(hit)
+        return hit
+
+    rebound = rebind.rebind_track(track, lookup)
     if rebound.songid != track.songid:
         log.info(
             "rebound %s songid %s -> %s",
@@ -91,7 +126,9 @@ def _rebind(track: Track) -> Track:
             track.songid,
             rebound.songid,
         )
-    return rebound
+    raw = hits[0].get("art") if hits else None
+    art = raw if isinstance(raw, dict) else {}
+    return rebound, {str(key): str(value) for key, value in art.items() if value}
 
 
 def _pause_once_playing() -> None:
@@ -118,10 +155,13 @@ def restore(
     track plays from 0:00 — for when the last seconds heard are worth hearing
     again rather than skipping past.
     """
-    tracks: List[Track] = [_rebind(track) for track in record.tracks if track.file]
-    if not tracks:
+    prepared: List[Tuple[Track, Dict[str, str]]] = [
+        _rebind(track) for track in record.tracks if track.file
+    ]
+    if not prepared:
         log.error("nothing playable in this record")
         return False
+    tracks: List[Track] = [track for track, _ in prepared]
 
     position, tick = playback_start(record, from_track_start)
     if position >= len(tracks):
@@ -129,8 +169,8 @@ def restore(
 
     playlist = xbmc.PlayList(MUSIC_PLAYLIST)
     playlist.clear()
-    for index, track in enumerate(tracks):
-        item = _list_item(track)
+    for index, (track, library_art) in enumerate(prepared):
+        item = _list_item(track, library_art)
         if index == position and tick >= MIN_OFFSET:
             item.setProperty("StartOffset", str(tick))
         playlist.add(track.file, item)

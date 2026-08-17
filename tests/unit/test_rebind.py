@@ -95,3 +95,32 @@ class TestRebindTrack:
         assert applied.title == "Act One"
         assert applied.album == "The Album"
         assert applied.songid == 3
+
+    def test_apply_library_hit_fills_missing_fanart_from_the_library(self):
+        # Records written before fanart was captured have none; the library
+        # row is where a restore of one gets its backdrop.
+        live = {
+            "songid": 3,
+            "file": "http://x/Audio/%s/stream.mp3" % JID,
+            "art": {"fanart": "image://back/"},
+        }
+        assert apply_library_hit(_track(fanart=""), live).fanart == "image://back/"
+
+    def test_apply_library_hit_keeps_recorded_fanart(self):
+        live = {
+            "songid": 3,
+            "file": "http://x/Audio/%s/stream.mp3" % JID,
+            "art": {"fanart": "image://server/"},
+        }
+        applied = apply_library_hit(_track(fanart="image://recorded/"), live)
+        assert applied.fanart == "image://recorded/"
+
+    def test_dropping_a_songid_keeps_the_art(self):
+        # The song has gone from the library, so it plays as a loose file —
+        # but the recorded art is still what it looked like.
+        rebound = rebind_track(
+            _track(thumb="image://cover/", fanart="image://back/"), lambda _id: None
+        )
+        assert rebound.songid is None
+        assert rebound.thumb == "image://cover/"
+        assert rebound.fanart == "image://back/"
