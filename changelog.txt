@@ -1,3 +1,6 @@
+v0.3.2
+• A restored queue shows the artist backdrop and logo again. Kodi does not fill library art in for a track that streams over http, so the art is now put on the restored item directly — taken from the library where the song is still there, and from the record where it is not
+
 v0.3.1
 • A queue that played through to the end restores from the first track, not the last second of the last one
 • A mixed playlist is named for the track that was playing when it stopped, not the first track in the list

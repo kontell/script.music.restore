@@ -57,6 +57,7 @@ def apply_library_hit(track: Track, song: Dict[str, Any]) -> Track:
         duration=track.duration or live.duration,
         songid=live.songid,
         thumb=track.thumb or live.thumb,
+        fanart=track.fanart or live.fanart,
     )
 
 
@@ -89,5 +90,6 @@ def rebind_track(track: Track, lookup: Lookup) -> Track:
             duration=track.duration,
             songid=None,
             thumb=track.thumb,
+            fanart=track.fanart,
         )
     return track

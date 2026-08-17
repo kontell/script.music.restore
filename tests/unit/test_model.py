@@ -62,6 +62,32 @@ class TestTrackFromPlaylistItem:
         track = Track.from_playlist_item({"type": "song", "id": 0, "file": "/a.flac"})
         assert track.songid is None
 
+    def test_flat_fanart_is_kept(self):
+        # What the recorder asks Playlist.GetItems for.
+        track = Track.from_playlist_item(
+            {"type": "song", "id": 5, "file": "/a.flac", "fanart": "image://back/"}
+        )
+        assert track.fanart == "image://back/"
+
+    def test_fanart_and_thumb_come_off_the_art_map_when_that_is_what_arrived(self):
+        # What the restore-side library lookup asks for.
+        track = Track.from_playlist_item(
+            {
+                "type": "song",
+                "id": 5,
+                "file": "/a.flac",
+                "art": {"thumb": "image://cover/", "fanart": "image://back/"},
+            }
+        )
+        assert track.thumb == "image://cover/"
+        assert track.fanart == "image://back/"
+
+    def test_a_junk_art_value_does_not_raise(self):
+        track = Track.from_playlist_item(
+            {"type": "song", "id": 5, "file": "/a.flac", "art": "not a map"}
+        )
+        assert track.fanart == ""
+
 
 class TestRoundTrip:
     def test_track_survives_serialisation(self):
@@ -73,6 +99,7 @@ class TestRoundTrip:
             duration=100,
             songid=7,
             thumb="image://x/",
+            fanart="image://back/",
         )
         assert Track.from_dict(track.to_dict()) == track
 
