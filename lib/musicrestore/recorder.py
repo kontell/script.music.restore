@@ -16,7 +16,10 @@ So this class mirrors the queue continuously and commits what it already holds:
   library id arrives carrying no file path at all.
 * Every second the position and elapsed time are read straight off the player
   (no JSON-RPC), which is what makes the shadow *armed*: it has a position that
-  was sampled while these exact tracks were live.
+  was sampled while these exact tracks were live. The position Kodi reports
+  belongs to whichever playlist the *player* is on, not to the music playlist
+  it was asked for, so it is reconciled against the file actually playing
+  before it is believed — see :meth:`Recorder._locate`.
 * A commit copies the shadow and disarms it. Nothing commits unless armed,
   which is what stops one user action leaving two rows — replacing an album
   fires ``OnClear`` and then ``Player.OnStop`` about 150 ms later, and by then
@@ -220,6 +223,50 @@ class Recorder(xbmc.Monitor):
             pass
         self._capture("playback stopped", ended=ended)
 
+    def _locate(self, playing: str, position: int, tick: float) -> Optional[int]:
+        """Which track of the shadow is playing, or None if it cannot be placed.
+
+        ``getposition()`` cannot be taken at face value. It reports the
+        *playlist player's* current index rather than an index into the
+        playlist object it was called on, and starting a video switches the
+        playlist player to the video playlist — and its index to 0 — several
+        seconds before the music actually stops. Every sample in that window
+        says "track 1" while the music still coming out of the speakers is
+        track 4, and the capture that follows saves the wrong track.
+
+        Measured on Kodi 22.0-BETA1 (Android): with 16 songs queued and track 4
+        playing, ``PlayList(1).getposition()`` returned 3 while
+        ``PlayList(1).size()`` was 0 — the video playlist was empty and still
+        reported the music playlist's index. A second later, with the video
+        opened and the music still audible, both playlists reported 0.
+
+        The file the player is actually on has no such ambiguity, so when the
+        reported position moves it is the file that decides.
+
+        Caller holds the lock.
+        """
+        count = len(self._items)
+        if not count:
+            return None
+        if position == self._position and position < count:
+            return position  # nothing moved; no need to look any further
+
+        matches = [i for i, track in enumerate(self._items) if track.file == playing]
+        if matches:
+            # A queue can hold the same song twice, so prefer the copy nearest
+            # to where playback already was.
+            return min(matches, key=lambda i: abs(i - self._position))
+
+        # Not a file we are holding: a plugin that resolved to a different URL,
+        # most likely. Fall back to the reported position, except when it has
+        # jumped backwards while the elapsed time kept climbing — one track
+        # cannot move, so that is another playlist taking the player over.
+        if position >= count:
+            return None
+        if position < self._position and tick > self._tick:
+            return None
+        return position
+
     def _sample(self) -> None:
         """Read position and elapsed time off the player. No JSON-RPC."""
         try:
@@ -227,14 +274,16 @@ class Recorder(xbmc.Monitor):
                 return
             tick = float(self._player.getTime())
             position = int(self._playlist.getposition())
+            playing = str(self._player.getPlayingFile())
         except Exception:  # noqa: BLE001 - playback can end mid-call
             return
         if position < 0:
             return
         with self._lock:
-            if not self._items or position >= len(self._items):
+            index = self._locate(playing, position, tick)
+            if index is None:
                 return
-            self._position = position
+            self._position = index
             self._tick = max(0.0, tick)
             self._armed = True
 
