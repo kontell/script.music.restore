@@ -16,14 +16,6 @@ Otherwise run it from Add-ons -> Program add-ons. Both open the same pop-up.
 
 ![Screenshot 1](docs/screenshot-01.png)
 
-### Settings
-
-| Setting | Default |     |
-| --- | --- | --- |
-| Queues to keep | 20  | Oldest drops off when full |
-| Restore the last queue when Kodi starts | off |     |
-| Start restored queues paused | off | On: loads at the right point and waits for play |
-| Restore from the start of the track | off | On: right track, but from 0:00 rather than mid-track |
 
 ## What gets recorded
 
@@ -36,10 +28,9 @@ A queue is saved whenever it is taken away:
 | Playback is stopped, or the queue ends | `Player.OnStop` |
 | Kodi quits | `System.OnQuit` |
 
-The history is a log, not a set. Play an album twice and it appears twice, at whatever point each listen reached. The only thing suppressed is an exact  
-repeat — same tracks, same track playing, same second — which is one event being reported twice rather than a second listen.
+The history is a log, not a set. Play an album twice and it appears twice, at whatever point each listen reached. The only thing suppressed is an exact repeat — same tracks, same track playing, same second — which is one event being reported twice rather than a second listen.
 
-A queue that plays through to the end is kept and labelled *Played through*. Restoring it starts at the first track, not the last second of the last one. A mixed playlist is named for the track that was playing when it stopped.
+A queue that plays through to the end is kept and labelled *Played through*, restoring it starts at the first track. A mixed playlist is named for the track that was playing when it stopped.
 
 History lives at  
 `special://profile/addon_data/script.music.restore/queues.json`
