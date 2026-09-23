@@ -11,10 +11,21 @@ What does work is building the playlist through the Python API and setting
 and is read by the audio player as its start time, so the track opens already
 seeked — no seek call afterwards, and none of the audible jump from the
 beginning that a play-then-seek gives.
+
+The files go on with one ``playlist.add(url)`` each. A ``ListItem`` per track
+was the slow part on a television: every ``setInfo``, ``setArt`` and
+``setProperty`` drops and retakes the interpreter lock, about 30 ms a track
+on a Bravia. Only the track that is starting is filled in before ``play``.
+The stored song id is checked for that track, and a path scan only when the
+id now names a different song. Once playback is going, the rest of the queue
+is checked the same way, from the next track through to the end and then from
+the top up to the one that started, and that is when those items get their
+tags and art.
 """
 
 import time
-from typing import Dict, List, Tuple, Union
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import xbmc
 import xbmcgui
@@ -31,104 +42,347 @@ MIN_OFFSET = 5.0
 PAUSE_TIMEOUT = 10.0
 PAUSE_STEP = 100  # ms
 
+# Set on a queued item whose song id has not been checked against the library
+# yet. The candidate id rides alongside it: stamping that id as the dbid
+# before the check is how a repaired library gets the wrong song.
+PENDING = "musicrestore.pending"
+SONGID = "musicrestore.songid"
 
-def _list_item(track: Track, library_art: Dict[str, str]) -> xbmcgui.ListItem:
-    item = xbmcgui.ListItem(label=track.title or track.file, offscreen=True)
-    item.setPath(track.file)
-    tag = item.getMusicInfoTag()
-    if track.title:
-        tag.setTitle(track.title)
-    if track.album:
-        tag.setAlbum(track.album)
-    if track.artist:
-        tag.setArtist(track.artist)
-    if track.duration:
-        tag.setDuration(track.duration)
-    # Carrying the library id through is what makes the restored item behave
-    # like the library song it came from rather than a loose file.
-    if track.songid:
-        tag.setDbId(track.songid, "song")
-    # The library id does not bring the art with it. ``CMusicGUIInfo::
-    # InitCurrentItem`` only reaches ``CMusicThumbLoader::FillLibraryArt`` —
-    # which is what puts fanart, clearlogo and the artist/album variants on the
-    # playing item — when the item is neither an internet stream nor a
-    # ``musicdb://`` path, and ``IsMusicDb()`` tests the path, not the dbid. A
-    # song streamed over http(s) is therefore left with whatever art we set
-    # here and nothing else. Verified on Kodi 21.3: Player.Art(fanart) was empty
-    # on a restored track whose songid resolved to a song that has fanart.
+
+# On every confirmed song. ``art`` is added only for the track about to
+# play, because that property starts the thumb loader.
+SONG_FIELDS = ["file", "year", "genre", "playcount"]
+
+
+@dataclass
+class SongFacts:
+    """Year, genre and play count from the library row.
+
+    The song-info dialog shows whatever is already on the item's tag. Marking
+    that tag loaded stops Kodi filling these from the database, which is how
+    a restored track was left with only title, artist, album and duration.
+    """
+
+    year: int = 0
+    genres: Tuple[str, ...] = ()
+    playcount: int = 0
+
+
+def song_facts(song: Dict[str, Any]) -> SongFacts:
+    """Pull year, genre and play count out of a library song row."""
+    try:
+        year = int(song.get("year") or 0)
+    except (TypeError, ValueError):
+        year = 0
+    raw = song.get("genre")
+    if isinstance(raw, str):
+        genres: Sequence[str] = (raw,) if raw else ()
+    elif isinstance(raw, list):
+        genres = tuple(str(item) for item in raw if item)
+    else:
+        genres = ()
+    try:
+        playcount = int(song.get("playcount") or 0)
+    except (TypeError, ValueError):
+        playcount = 0
+    return SongFacts(year, tuple(genres), playcount)
+
+
+def _detail_properties(with_art: bool) -> List[str]:
+    if with_art:
+        return SONG_FIELDS + ["art"]
+    return list(SONG_FIELDS)
+
+
+@dataclass
+class Confirmed:
+    """A track after one attempt to point it at the live library row."""
+
+    track: Track
+    art: Dict[str, str]
+    # False when Kodi could not be asked. The item stays pending and is tried
+    # again; a settled miss drops the song id instead of keeping a stale one.
+    settled: bool
+    lookups: int
+    facts: SongFacts = field(default_factory=SongFacts)
+
+
+def _apply_art(
+    item: xbmcgui.ListItem, track: Track, library_art: Dict[str, str]
+) -> None:
     art: Dict[str, str] = dict(library_art)
     # What the record carries wins, for the same reason it wins in
     # ``rebind.apply_library_hit``: it is what the history row showed.
-    if track.thumb:
-        art["thumb"] = track.thumb
-        art["icon"] = track.thumb
-    if track.fanart:
-        art["fanart"] = track.fanart
+    thumb = track.thumb or item.getArt("thumb")
+    fanart = track.fanart or item.getArt("fanart")
+    if thumb:
+        art["thumb"] = thumb
+        art["icon"] = thumb
+    if fanart:
+        art["fanart"] = fanart
     if art:
         item.setArt(art)
-    return item
 
 
-def _lookup_library_song(
-    jellyfin_id: str,
-) -> Union[dict, None, object]:
-    """The current library row for a Jellyfin audio id, or None if it is gone.
+def _apply_facts(item: xbmcgui.ListItem, facts: SongFacts) -> None:
+    tag = item.getMusicInfoTag()
+    if facts.year:
+        tag.setYear(facts.year)
+    if facts.genres:
+        tag.setGenres(list(facts.genres))
+    if facts.playcount:
+        tag.setPlayCount(facts.playcount)
+
+
+def _fill(
+    item: xbmcgui.ListItem,
+    track: Track,
+    library_art: Dict[str, str],
+    stamp_songid: bool,
+    pending: bool,
+    facts: Optional[SongFacts] = None,
+) -> None:
+    """Put the record, and any library facts, onto an item already queued.
+
+    ``setInfo`` is deprecated, and it is the call that marks the music tag
+    loaded. The InfoTagMusic setters do not, and an unloaded tag makes Kodi
+    open the music database and then the file for every queued item the
+    first time the player asks about it. One label is enough to set the
+    flag, so mediatype is always present.
+    """
+    if track.title:
+        item.setLabel(track.title)
+    item.setPath(track.file)
+    info = {"mediatype": "song"}
+    if track.title:
+        info["title"] = track.title
+    if track.album:
+        info["album"] = track.album
+    if track.artist:
+        info["artist"] = track.artist
+    if track.duration:
+        info["duration"] = str(track.duration)
+    if stamp_songid and track.songid:
+        info["dbid"] = str(track.songid)
+    item.setInfo("music", info)
+    if facts is not None:
+        _apply_facts(item, facts)
+    _apply_art(item, track, library_art)
+    item.setProperty(SONGID, str(track.songid or ""))
+    item.setProperty(PENDING, "1" if pending else "")
+
+
+def _confirm_known(
+    playlist: xbmc.PlayList, index: int, track: Track, with_art: bool
+) -> None:
+    """Match one known record track to the item now sitting at ``index``.
+
+    The items were queued as bare files, so there is no pending flag to
+    read. The record still has the candidate song id.
+    """
+    try:
+        item = playlist[index]  # type: ignore[index]
+    except Exception:  # noqa: BLE001
+        return
+    if not rebind.jellyfin_audio_id(track.file):
+        _fill(item, track, {}, bool(track.songid), False, None)
+        return
+    confirmed = confirm_track(track, with_art)
+    if not confirmed.settled:
+        # No dbid until the library can be asked. A guessed one is how a
+        # repaired library gets the wrong song. The candidate id stays in
+        # a property so a later pass can try again.
+        _fill(item, track, {}, False, True, None)
+        return
+    _note_rebind(track, confirmed.track)
+    _fill(
+        item,
+        confirmed.track,
+        confirmed.art if with_art else {},
+        bool(confirmed.track.songid),
+        False,
+        confirmed.facts,
+    )
+
+
+def _scan(item_id: str, with_art: bool) -> object:
+    """The current library row for a Jellyfin audio id.
+
+    Returns the song dict, None when the library was asked and the song is
+    gone, or :data:`rebind.LOOKUP_FAILED` when it could not be asked.
 
     Filters on path: Kodi stores the host URL in ``path.strPath`` and the
     ``stream.*`` leaf in ``song.strFileName``, so a filename filter misses.
-    Verified live — ``field=path, operator=contains`` returns the one song.
+    ``includesingles`` is set because an absent value makes ``GetSongs`` skip
+    singles, and a repaired single would then look deleted.
     """
-    result = jsonrpc.call(
+    result, error = jsonrpc.invoke(
         "AudioLibrary.GetSongs",
-        filter={"field": "path", "operator": "contains", "value": jellyfin_id},
-        properties=[
-            "file",
-            "title",
-            "artist",
-            "albumartist",
-            "album",
-            "duration",
-            "thumbnail",
-            # The whole map, not just fanart: this is one row, and it is the
-            # only chance to give the restored item clearlogo and the
-            # ``artist.*``/``album.*`` art a skin may ask for by name.
-            "art",
-        ],
+        filter={"field": "path", "operator": "contains", "value": item_id},
+        properties=_detail_properties(with_art),
+        includesingles=True,
         limits={"end": 1},
     )
-    if result is None:
+    if error is not None or result is None:
         return rebind.LOOKUP_FAILED
-    songs = result.get("songs") or []
-    return songs[0] if songs else None
+    songs = result.get("songs") if isinstance(result, dict) else None
+    if not songs:
+        return None
+    return songs[0] if isinstance(songs[0], dict) else None
 
 
-def _rebind(track: Track) -> Tuple[Track, Dict[str, str]]:
-    """``track`` pointed at the live library row, and that row's art map.
+def confirm_track(track: Track, with_art: bool) -> Confirmed:
+    """Point ``track`` at the live library row, if it has moved.
 
-    The art rides along on the lookup ``rebind_track`` is already making, so a
-    restore that finds its songs still in the library costs nothing extra and
-    hands back everything the library knows — not only the fanart the record
-    stored.
+    A stored song id is one primary-key read. The path scan runs only when
+    that id is missing or now belongs to a different Jellyfin item. ``art``
+    is filled only when ``with_art`` is set — the track that is about to
+    play, not the rest of the queue.
     """
-    hits: List[dict] = []
+    item_id = rebind.jellyfin_audio_id(track.file)
+    if not item_id:
+        return Confirmed(track, {}, True, 0)
 
-    def lookup(item_id: str) -> Union[dict, None, object]:
-        hit = _lookup_library_song(item_id)
-        if isinstance(hit, dict):
-            hits.append(hit)
-        return hit
+    lookups = 0
+    if track.songid:
+        lookups += 1
+        result, error = jsonrpc.invoke(
+            "AudioLibrary.GetSongDetails",
+            songid=track.songid,
+            properties=_detail_properties(with_art),
+        )
+        song: Optional[dict] = None
+        if error is None and isinstance(result, dict):
+            raw = result.get("songdetails")
+            song = raw if isinstance(raw, dict) else None
+        if song is not None and rebind.same_library_song(
+            track, str(song.get("file") or "")
+        ):
+            art = rebind.art_map(song) if with_art else {}
+            return Confirmed(
+                rebind.apply_library_hit(track, song),
+                art,
+                True,
+                lookups,
+                song_facts(song),
+            )
+        # The id is gone, or it was reused. Fall through to the path scan.
+        # An error here is not fatal on its own: the scan is the second ask,
+        # and if that cannot be made either, the track stays unsettled.
 
-    rebound = rebind.rebind_track(track, lookup)
-    if rebound.songid != track.songid:
+    lookups += 1
+    found = _scan(item_id, with_art)
+    if found is rebind.LOOKUP_FAILED:
+        return Confirmed(track, {}, False, lookups)
+    if isinstance(found, dict):
+        art = rebind.art_map(found) if with_art else {}
+        return Confirmed(
+            rebind.apply_library_hit(track, found),
+            art,
+            True,
+            lookups,
+            song_facts(found),
+        )
+    return Confirmed(
+        Track(
+            file=track.file,
+            title=track.title,
+            artist=track.artist,
+            album=track.album,
+            duration=track.duration,
+            songid=None,
+            thumb=track.thumb,
+            fanart=track.fanart,
+        ),
+        {},
+        True,
+        lookups,
+    )
+
+
+def _note_rebind(before: Track, after: Track) -> None:
+    if after.songid != before.songid:
         log.info(
             "rebound %s songid %s -> %s",
-            rebound.title or rebound.file,
-            track.songid,
-            rebound.songid,
+            after.title or after.file,
+            before.songid,
+            after.songid,
         )
-    raw = hits[0].get("art") if hits else None
-    art = raw if isinstance(raw, dict) else {}
-    return rebound, {str(key): str(value) for key, value in art.items() if value}
+
+
+def _track_from_item(item: xbmcgui.ListItem) -> Track:
+    tag = item.getMusicInfoTag()
+    raw = item.getProperty(SONGID)
+    songid: Optional[int] = int(raw) if raw.isdigit() else None
+    return Track(
+        file=item.getPath() or "",
+        title=tag.getTitle() or "",
+        artist=tag.getArtist() or "",
+        album=tag.getAlbum() or "",
+        duration=int(tag.getDuration() or 0),
+        songid=songid,
+        thumb=item.getArt("thumb") or "",
+        fanart=item.getArt("fanart") or "",
+    )
+
+
+def _stamp(
+    item: xbmcgui.ListItem,
+    track: Track,
+    art: Optional[Dict[str, str]],
+    facts: SongFacts,
+) -> None:
+    if track.file and track.file != item.getPath():
+        item.setPath(track.file)
+    if track.songid:
+        item.getMusicInfoTag().setDbId(track.songid, "song")
+        item.setProperty(SONGID, str(track.songid))
+    else:
+        item.setProperty(SONGID, "")
+    _apply_facts(item, facts)
+    if art is not None:
+        _apply_art(item, track, art)
+    item.setProperty(PENDING, "")
+
+
+def confirmation_order(count: int, started: int) -> List[int]:
+    """Every index except ``started``, beginning at the next track.
+
+    Playback has already started at ``started``. The walk continues to the
+    end of the queue and then from the top up to the track that started, so
+    the song about to play is settled first and the rest of the queue is
+    still covered.
+    """
+    if count <= 1 or not 0 <= started < count:
+        return []
+    return list(range(started + 1, count)) + list(range(started))
+
+
+def confirm_playlist_slot(playlist: xbmc.PlayList, index: int, with_art: bool) -> None:
+    """Confirm one queued item, if restore left it pending.
+
+    Safe to call repeatedly, and from the service thread: an item that is
+    not pending returns without a library call. Failures stay pending so the
+    next pass can try again.
+    """
+    try:
+        # Kodistubs' PlayList declares no __getitem__; Kodi's playlist does.
+        item = playlist[index]  # type: ignore[index]
+    except Exception:  # noqa: BLE001 - the playlist can shrink under us
+        return
+    if item.getProperty(PENDING) != "1":
+        return
+    before = _track_from_item(item)
+    confirmed = confirm_track(before, with_art)
+    if not confirmed.settled:
+        return
+    _note_rebind(before, confirmed.track)
+    _stamp(
+        item,
+        confirmed.track,
+        confirmed.art if with_art else None,
+        confirmed.facts,
+    )
 
 
 def _pause_once_playing() -> None:
@@ -155,31 +409,62 @@ def restore(
     track plays from 0:00 — for when the last seconds heard are worth hearing
     again rather than skipping past.
     """
-    prepared: List[Tuple[Track, Dict[str, str]]] = [
-        _rebind(track) for track in record.tracks if track.file
-    ]
-    if not prepared:
+    started = time.perf_counter()
+    tracks: List[Track] = [track for track in record.tracks if track.file]
+    if not tracks:
         log.error("nothing playable in this record")
         return False
-    tracks: List[Track] = [track for track, _ in prepared]
 
     position, tick = playback_start(record, from_track_start)
     if position >= len(tracks):
         position, tick = 0, 0.0
 
+    lookups = 0
+    resume_art: Dict[str, str] = {}
+    resume_facts = SongFacts()
+    resume_settled = True
+    if rebind.jellyfin_audio_id(tracks[position].file):
+        confirmed = confirm_track(tracks[position], with_art=True)
+        lookups += confirmed.lookups
+        resume_settled = confirmed.settled
+        if confirmed.settled:
+            _note_rebind(tracks[position], confirmed.track)
+            tracks[position] = confirmed.track
+            resume_art = confirmed.art
+            resume_facts = confirmed.facts
+
     playlist = xbmc.PlayList(MUSIC_PLAYLIST)
     playlist.clear()
-    for index, (track, library_art) in enumerate(prepared):
-        item = _list_item(track, library_art)
-        if index == position and tick >= MIN_OFFSET:
-            item.setProperty("StartOffset", str(tick))
-        playlist.add(track.file, item)
+    # The url alone. A ListItem here is several lock round-trips per track,
+    # and nothing but the starting track needs one before play.
+    for track in tracks:
+        playlist.add(track.file)
+
+    try:
+        current = playlist[position]  # type: ignore[index]
+    except Exception:  # noqa: BLE001
+        log.error("resume track %d is not on the playlist", position)
+        return False
+    resume = tracks[position]
+    _fill(
+        current,
+        resume,
+        resume_art,
+        bool(resume.songid),
+        bool(rebind.jellyfin_audio_id(resume.file)) and not resume_settled,
+        resume_facts if resume_settled else None,
+    )
+    if tick >= MIN_OFFSET:
+        current.setProperty("StartOffset", str(tick))
 
     log.info(
-        "restoring %d track(s) from position %d at %.0fs%s%s",
+        "restoring %d track(s) from position %d at %.0fs in %.0fms"
+        " (%d library lookup(s) before play)%s%s",
         len(tracks),
         position,
         tick,
+        (time.perf_counter() - started) * 1000.0,
+        lookups,
         (
             " (from the start of the track)"
             if from_track_start and not record.finished
@@ -189,6 +474,20 @@ def restore(
     )
     xbmc.Player().play(playlist, startpos=position)
 
+    # Pause before the walk. A queue restored paused should not keep playing
+    # while the remaining song ids are checked.
     if start_paused:
         _pause_once_playing()
+
+    # The track that is playing was checked above. Art for the one about to
+    # play; the rest are an id check only, or the per-track art cost comes back.
+    order = confirmation_order(len(tracks), position)
+    for place, index in enumerate(order):
+        _confirm_known(playlist, index, tracks[index], with_art=(place == 0))
+    if order:
+        log.info(
+            "matched %d later track(s), starting from %d",
+            len(order),
+            order[0],
+        )
     return True

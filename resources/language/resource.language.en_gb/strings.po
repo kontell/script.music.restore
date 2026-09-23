@@ -16,7 +16,7 @@ msgid "Queues to keep"
 msgstr ""
 
 msgctxt "#30002"
-msgid "How many recent queues the list holds. The oldest drops off once the list is full. Restoring a queue does not take it off the list, and playing the same album twice leaves two entries, so the list fills faster than the number of different albums you play."
+msgid "How many recent queues the list holds."
 msgstr ""
 
 msgctxt "#30003"
@@ -24,7 +24,7 @@ msgid "Restore the last queue when Kodi starts"
 msgstr ""
 
 msgctxt "#30004"
-msgid "Bring the most recent queue back automatically, once Kodi has finished starting. Leave this off to choose from the list yourself."
+msgid "Bring the most recent queue back automatically, once Kodi has finished starting."
 msgstr ""
 
 msgctxt "#30005"
@@ -32,7 +32,7 @@ msgid "Start restored queues paused"
 msgstr ""
 
 msgctxt "#30006"
-msgid "Load a restored queue on the right track at the right second, but wait for you to press play. Off by default, so restoring picks up where you left off straight away."
+msgid "Load a restored queue on the right track at the right second, but wait for you to press play."
 msgstr ""
 
 msgctxt "#30007"
@@ -40,7 +40,7 @@ msgid "Restore from the start of the track"
 msgstr ""
 
 msgctxt "#30008"
-msgid "Go back to the right track but play it from the beginning, instead of the second it was interrupted at. Off by default, so restoring picks up mid-track where you left off."
+msgid "Go back to the right track but play it from the beginning, instead of the second it was interrupted at."
 msgstr ""
 
 # 30010 is the button label. skin.contuary renders it by id, as $ADDON[script.music.restore 30010] — changing the wording changes the button.

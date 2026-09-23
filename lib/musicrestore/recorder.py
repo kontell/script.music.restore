@@ -267,25 +267,50 @@ class Recorder(xbmc.Monitor):
             return None
         return position
 
-    def _sample(self) -> None:
-        """Read position and elapsed time off the player. No JSON-RPC."""
+    def _sample(self) -> Optional[int]:
+        """Read position and elapsed time off the player. No JSON-RPC.
+
+        Returns the reconciled music-playlist index when a sample was taken,
+        so the caller can confirm the track that is playing and the one
+        after it without doing that work in here.
+        """
         try:
             if not self._player.isPlayingAudio():
-                return
+                return None
             tick = float(self._player.getTime())
             position = int(self._playlist.getposition())
             playing = str(self._player.getPlayingFile())
         except Exception:  # noqa: BLE001 - playback can end mid-call
-            return
+            return None
         if position < 0:
-            return
+            return None
         with self._lock:
             index = self._locate(playing, position, tick)
             if index is None:
-                return
+                return None
             self._position = index
             self._tick = max(0.0, tick)
             self._armed = True
+        return index
+
+    def _confirm_near(self, index: int) -> None:
+        """Retry a song id the post-play walk could not settle.
+
+        That walk covers the queue. This only sees items still pending,
+        which is a lookup that failed. An item that is not pending costs a
+        property read. Runs on the service thread, outside the sample lock,
+        because the check is a library call.
+        """
+        try:
+            size = int(self._playlist.size())
+        except Exception:  # noqa: BLE001
+            return
+        for slot in (index, index + 1):
+            if 0 <= slot < size:
+                try:
+                    restore.confirm_playlist_slot(self._playlist, slot, with_art=True)
+                except Exception as exc:  # noqa: BLE001
+                    log.error("confirming track %d failed: %s", slot, exc)
 
     # -------------------------------------------------------------- capture
 
@@ -356,7 +381,9 @@ class Recorder(xbmc.Monitor):
             self._maybe_refresh()
             self._settle_stop()
             if ticks % SAMPLE_EVERY == 0:
-                self._sample()
+                heard = self._sample()
+                if heard is not None:
+                    self._confirm_near(heard)
             self._drain()
 
         # Kodi is going down and the queue goes with it. Usually already done

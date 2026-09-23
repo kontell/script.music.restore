@@ -1,32 +1,36 @@
+v0.3.4
+- Significant time to playback start improvement.
+- Song information on a restored track is now the same as per a track queued from the library
+
 v0.3.3
-• A queue interrupted by a video is put away on the track you were actually on, rather than the first one. Kodi reports the position of whichever playlist the player has moved to, so a starting video called it track 1 for several seconds while the music was still playing — the track is now taken from the file coming out of the speakers instead
+- A queue interrupted by a video is put away on the track you were actually on, rather than the first one.
 
 v0.3.2
-• A restored queue shows the artist backdrop and logo again. Kodi does not fill library art in for a track that streams over http, so the art is now put on the restored item directly — taken from the library where the song is still there, and from the record where it is not
+- A restored queue shows the artist backdrop and logo again.
 
 v0.3.1
-• A queue that played through to the end restores from the first track, not the last second of the last one
-• A mixed playlist is named for the track that was playing when it stopped, not the first track in the list
-• The restore pop-up opens faster: one Addon handle for the whole list, offscreen ListItems, and the script interpreter is reused between opens
-• After a kofin library repair, restore looks each song up by the Jellyfin id in its URL so Now Playing still names the tracks you actually saved, not whoever reused the old Kodi song ids
+- A queue that played through to the end restores from the first track, not the last second of the last one
+- A mixed playlist is named for the track that was playing when it stopped, not the first track in the list
+- The restore pop-up opens faster: one Addon handle for the whole list, offscreen ListItems, and the script interpreter is reused between opens
+- After a kofin library repair, restore looks each song up by the Jellyfin id in its URL so Now Playing still names the tracks you actually saved, not whoever reused the old Kodi song ids
 
 v0.3.0
-• The "Recent queues" button is now part of Contuary itself, which shows it on the music row whenever this add-on is enabled. Nothing to switch on, and a skin update no longer takes it away
-• The two settings buttons that edited the skin are gone, along with the editing itself. Running an older version's edit is undone by updating Contuary
-• Stock Estuary no longer gets the button. Run the add-on from Add-ons → Program add-ons instead
-• New "Restore from the start of the track" setting: go back to the right track but play it from the beginning rather than the second it was interrupted at. Off by default
-• The pop-up is now called "Restore queue", after what picking a row does. The button is still "Recent queues"
-• The restoring notification carries the add-on's own icon instead of a generic information symbol, and the icon is now the button's mark
+- The "Recent queues" button is now part of Contuary itself, which shows it on the music row whenever this add-on is enabled. Nothing to switch on, and a skin update no longer takes it away
+- The two settings buttons that edited the skin are gone, along with the editing itself. Running an older version's edit is undone by updating Contuary
+- Stock Estuary no longer gets the button. Run the add-on from Add-ons → Program add-ons instead
+- New "Restore from the start of the track" setting: go back to the right track but play it from the beginning rather than the second it was interrupted at. Off by default
+- The pop-up is now called "Restore queue", after what picking a row does. The button is still "Recent queues"
+- The restoring notification carries the add-on's own icon instead of a generic information symbol, and the icon is now the button's mark
 
 v0.2.0
-• The "Recent queues" button can now be placed on the skin's home screen from the add-on settings: the running skin is edited so its music categories row gets a button that opens the pop-up directly, with no window change
-• Estuary and Contuary are supported. The edit is reversible from the same settings page, and a skin update that wipes it is put right by running it again
-• When Kodi's bundled skin cannot be edited in place, an editable copy is set up in the user's add-ons and the button added there
+- The "Recent queues" button can now be placed on the skin's home screen from the add-on settings: the running skin is edited so its music categories row gets a button that opens the pop-up directly, with no window change
+- Estuary and Contuary are supported. The edit is reversible from the same settings page, and a skin update that wipes it is put right by running it again
+- When Kodi's bundled skin cannot be edited in place, an editable copy is set up in the user's add-ons and the button added there
 
 v0.1.0
-• First release. Records the music queue every time it is taken away — when a new album or playlist replaces it, when a video interrupts it, when playback is stopped, and when Kodi quits
-• Each entry remembers which track was playing and how far into it, and restores to exactly that point rather than starting the track again
-• Pick from the "Recent queues" list: album and artist, how many tracks and how many unplayed, how long ago it was played and where it stopped
-• Playing the same album twice leaves two entries, and restoring one leaves it on the list, so nothing is lost by choosing the wrong one
-• Reached from the "Recent queues" button in the skin's music row, or by running the add-on
-• Settings for how many queues to keep, whether to restore the last one when Kodi starts, and whether restored queues start playing or wait paused
+- First release. Records the music queue every time it is taken away — when a new album or playlist replaces it, when a video interrupts it, when playback is stopped, and when Kodi quits
+- Each entry remembers which track was playing and how far into it, and restores to exactly that point rather than starting the track again
+- Pick from the "Recent queues" list: album and artist, how many tracks and how many unplayed, how long ago it was played and where it stopped
+- Playing the same album twice leaves two entries, and restoring one leaves it on the list, so nothing is lost by choosing the wrong one
+- Reached from the "Recent queues" button in the skin's music row, or by running the add-on
+- Settings for how many queues to keep, whether to restore the last one when Kodi starts, and whether restored queues start playing or wait paused

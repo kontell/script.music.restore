@@ -27,9 +27,9 @@ class Track:
     ``thumb`` and ``fanart`` are stored because a restored item gets exactly the
     art we put on it and no more — Kodi does not fill library art in for a track
     that plays from an http(s) URL, songid or not. See ``restore._list_item``.
-    Only those two are kept: the rest of the library's art map is fetched at
-    restore time, and the whole history is parsed to open the dialog, so a row
-    here is not the place for fourteen image URLs per track.
+    Only those two are kept. The rest of the library's art map is fetched for
+    the track that is about to play, and the whole history is parsed to open
+    the dialog, so a row here is not the place for fourteen image URLs per track.
     """
 
     file: str

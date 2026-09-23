@@ -6,8 +6,8 @@ old numbers — often for different tracks, because a repair walks newest-first.
 The file URL still names the Jellyfin item (``/Audio/<id>/`` or
 ``plugin://plugin.video.kofin/<library>/<id>/``), which survives the rebuild.
 
-Look that id up in the live library and rewrite ``songid`` and ``file`` before
-we play. A stale ``setDbId`` would otherwise stamp the restored item onto
+The resume track is checked before it plays, and each later track as it
+becomes the next one. A stale ``setDbId`` would stamp the restored item onto
 whoever now occupies the old number — play counts, the info dialog, and
 anything else reading the music tag follow the wrong row. The stream URL
 itself is still right; the library link is what breaks.
@@ -35,6 +35,28 @@ def jellyfin_audio_id(file: str) -> Optional[str]:
     """The Jellyfin item id baked into a kofin/Jellyfin song URL, or None."""
     match = _JELLYFIN_AUDIO.search(file or "")
     return match.group(1).lower() if match else None
+
+
+def same_library_song(track: Track, file: str) -> bool:
+    """True when ``file`` is still the library row for ``track``.
+
+    A Jellyfin URL matches on the item id, not the whole string: the host,
+    the query and the route change across a repair, and the id does not. A
+    file that is not a Jellyfin audio path has nothing to rebind, so the
+    stored song id stands.
+    """
+    item_id = jellyfin_audio_id(track.file)
+    if not item_id:
+        return True
+    return jellyfin_audio_id(file) == item_id
+
+
+def art_map(song: Dict[str, Any]) -> Dict[str, str]:
+    """The library art map from a song row, dropping empty entries."""
+    raw = song.get("art")
+    if not isinstance(raw, dict):
+        return {}
+    return {str(key): str(value) for key, value in raw.items() if value}
 
 
 def apply_library_hit(track: Track, song: Dict[str, Any]) -> Track:
