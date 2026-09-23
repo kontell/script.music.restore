@@ -15,7 +15,7 @@
     <license>GPL-3.0-only</license>
     <source>https://github.com/kontell/script.music.restore</source>
     <summary lang="en_GB">Bring back a music queue you were part-way through</summary>
-    <description lang="en_GB">Records the music queue every time it is taken away — when a new album replaces it, when a video interrupts it, when playback is stopped, and when Kodi quits — along with which track you were on and how far into it. Pick one back off the list and it resumes on the right track at the right second, or from the start of that track if you prefer. Reached from the "Recent queues" button on Contuary's music row, or by running the add-on.</description>
+    <description lang="en_GB">Records the music queue and playback position every time music is stopped. Resume playback from a list of previous queues by running the add-on.</description>
     <reuselanguageinvoker>true</reuselanguageinvoker>
     <assets>
       <icon>resources/button.png</icon>
