@@ -23,8 +23,8 @@ then from the top up to the one that started.
 """
 
 import time
-from dataclasses import dataclass
-from typing import Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import xbmc
 import xbmcgui
@@ -48,6 +48,51 @@ PENDING = "musicrestore.pending"
 SONGID = "musicrestore.songid"
 
 
+# On every confirmed song. ``art`` is added only for the track about to
+# play, because that property starts the thumb loader.
+SONG_FIELDS = ["file", "year", "genre", "playcount"]
+
+
+@dataclass
+class SongFacts:
+    """Year, genre and play count from the library row.
+
+    The song-info dialog shows whatever is already on the item's tag. Marking
+    that tag loaded stops Kodi filling these from the database, which is how
+    a restored track was left with only title, artist, album and duration.
+    """
+
+    year: int = 0
+    genres: Tuple[str, ...] = ()
+    playcount: int = 0
+
+
+def song_facts(song: Dict[str, Any]) -> SongFacts:
+    """Pull year, genre and play count out of a library song row."""
+    try:
+        year = int(song.get("year") or 0)
+    except (TypeError, ValueError):
+        year = 0
+    raw = song.get("genre")
+    if isinstance(raw, str):
+        genres: Sequence[str] = (raw,) if raw else ()
+    elif isinstance(raw, list):
+        genres = tuple(str(item) for item in raw if item)
+    else:
+        genres = ()
+    try:
+        playcount = int(song.get("playcount") or 0)
+    except (TypeError, ValueError):
+        playcount = 0
+    return SongFacts(year, tuple(genres), playcount)
+
+
+def _detail_properties(with_art: bool) -> List[str]:
+    if with_art:
+        return SONG_FIELDS + ["art"]
+    return list(SONG_FIELDS)
+
+
 @dataclass
 class Confirmed:
     """A track after one attempt to point it at the live library row."""
@@ -58,6 +103,7 @@ class Confirmed:
     # again; a settled miss drops the song id instead of keeping a stale one.
     settled: bool
     lookups: int
+    facts: SongFacts = field(default_factory=SongFacts)
 
 
 def _apply_art(
@@ -77,11 +123,22 @@ def _apply_art(
         item.setArt(art)
 
 
+def _apply_facts(item: xbmcgui.ListItem, facts: SongFacts) -> None:
+    tag = item.getMusicInfoTag()
+    if facts.year:
+        tag.setYear(facts.year)
+    if facts.genres:
+        tag.setGenres(list(facts.genres))
+    if facts.playcount:
+        tag.setPlayCount(facts.playcount)
+
+
 def _list_item(
     track: Track,
     library_art: Dict[str, str],
     stamp_songid: bool,
     pending: bool,
+    facts: Optional[SongFacts] = None,
 ) -> xbmcgui.ListItem:
     item = xbmcgui.ListItem(label=track.title or track.file, offscreen=True)
     item.setPath(track.file)
@@ -102,6 +159,8 @@ def _list_item(
     if stamp_songid and track.songid:
         info["dbid"] = str(track.songid)
     item.setInfo("music", info)
+    if facts is not None:
+        _apply_facts(item, facts)
     _apply_art(item, track, library_art)
     if track.songid:
         item.setProperty(SONGID, str(track.songid))
@@ -121,11 +180,10 @@ def _scan(item_id: str, with_art: bool) -> object:
     ``includesingles`` is set because an absent value makes ``GetSongs`` skip
     singles, and a repaired single would then look deleted.
     """
-    properties = ["file", "art"] if with_art else ["file"]
     result, error = jsonrpc.invoke(
         "AudioLibrary.GetSongs",
         filter={"field": "path", "operator": "contains", "value": item_id},
-        properties=properties,
+        properties=_detail_properties(with_art),
         includesingles=True,
         limits={"end": 1},
     )
@@ -155,7 +213,7 @@ def confirm_track(track: Track, with_art: bool) -> Confirmed:
         result, error = jsonrpc.invoke(
             "AudioLibrary.GetSongDetails",
             songid=track.songid,
-            properties=["file", "art"] if with_art else ["file"],
+            properties=_detail_properties(with_art),
         )
         song: Optional[dict] = None
         if error is None and isinstance(result, dict):
@@ -165,7 +223,13 @@ def confirm_track(track: Track, with_art: bool) -> Confirmed:
             track, str(song.get("file") or "")
         ):
             art = rebind.art_map(song) if with_art else {}
-            return Confirmed(rebind.apply_library_hit(track, song), art, True, lookups)
+            return Confirmed(
+                rebind.apply_library_hit(track, song),
+                art,
+                True,
+                lookups,
+                song_facts(song),
+            )
         # The id is gone, or it was reused. Fall through to the path scan.
         # An error here is not fatal on its own: the scan is the second ask,
         # and if that cannot be made either, the track stays unsettled.
@@ -176,7 +240,13 @@ def confirm_track(track: Track, with_art: bool) -> Confirmed:
         return Confirmed(track, {}, False, lookups)
     if isinstance(found, dict):
         art = rebind.art_map(found) if with_art else {}
-        return Confirmed(rebind.apply_library_hit(track, found), art, True, lookups)
+        return Confirmed(
+            rebind.apply_library_hit(track, found),
+            art,
+            True,
+            lookups,
+            song_facts(found),
+        )
     return Confirmed(
         Track(
             file=track.file,
@@ -220,7 +290,12 @@ def _track_from_item(item: xbmcgui.ListItem) -> Track:
     )
 
 
-def _stamp(item: xbmcgui.ListItem, track: Track, art: Optional[Dict[str, str]]) -> None:
+def _stamp(
+    item: xbmcgui.ListItem,
+    track: Track,
+    art: Optional[Dict[str, str]],
+    facts: SongFacts,
+) -> None:
     if track.file and track.file != item.getPath():
         item.setPath(track.file)
     if track.songid:
@@ -228,6 +303,7 @@ def _stamp(item: xbmcgui.ListItem, track: Track, art: Optional[Dict[str, str]]) 
         item.setProperty(SONGID, str(track.songid))
     else:
         item.setProperty(SONGID, "")
+    _apply_facts(item, facts)
     if art is not None:
         _apply_art(item, track, art)
     item.setProperty(PENDING, "")
@@ -265,7 +341,12 @@ def confirm_playlist_slot(playlist: xbmc.PlayList, index: int, with_art: bool) -
     if not confirmed.settled:
         return
     _note_rebind(before, confirmed.track)
-    _stamp(item, confirmed.track, confirmed.art if with_art else None)
+    _stamp(
+        item,
+        confirmed.track,
+        confirmed.art if with_art else None,
+        confirmed.facts,
+    )
 
 
 def _pause_once_playing() -> None:
@@ -304,6 +385,7 @@ def restore(
 
     lookups = 0
     resume_art: Dict[str, str] = {}
+    resume_facts = SongFacts()
     resume_settled = True
     if rebind.jellyfin_audio_id(tracks[position].file):
         confirmed = confirm_track(tracks[position], with_art=True)
@@ -313,6 +395,7 @@ def restore(
             _note_rebind(tracks[position], confirmed.track)
             tracks[position] = confirmed.track
             resume_art = confirmed.art
+            resume_facts = confirmed.facts
 
     playlist = xbmc.PlayList(MUSIC_PLAYLIST)
     playlist.clear()
@@ -330,6 +413,7 @@ def restore(
             resume_art if is_resume else {},
             stamp_songid,
             pending,
+            resume_facts if is_resume else None,
         )
         if is_resume and tick >= MIN_OFFSET:
             item.setProperty("StartOffset", str(tick))

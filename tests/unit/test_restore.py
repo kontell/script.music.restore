@@ -36,10 +36,22 @@ class FakeTag:
         self.artist = ""
         self.album = ""
         self.duration = 0
+        self.year = 0
+        self.genres: List[str] = []
+        self.playcount = 0
 
     def setDbId(self, dbid: int, typ: str) -> None:
         self.dbid = dbid
         self.media_type = typ
+
+    def setYear(self, year: int) -> None:
+        self.year = year
+
+    def setGenres(self, genres: List[str]) -> None:
+        self.genres = list(genres)
+
+    def setPlayCount(self, playcount: int) -> None:
+        self.playcount = playcount
 
     def getTitle(self) -> str:
         return self.title
@@ -178,6 +190,9 @@ def _rows(*tracks: Track) -> Dict[int, Dict[str, Any]]:
         rows[track.songid] = {
             "songid": track.songid,
             "file": track.file,
+            "year": 1977,
+            "genre": ["Rock"],
+            "playcount": 4,
             "art": {"clearlogo": "image://logo/%d" % track.songid},
         }
     return rows
@@ -208,7 +223,7 @@ class TestRestoreOrder:
         assert [call[1]["songid"] for call in rig.calls] == [100, 101, 102]
         assert "art" in rig.calls[0][1]["properties"]
         assert "art" in rig.calls[1][1]["properties"]
-        assert rig.calls[2][1]["properties"] == ["file"]
+        assert rig.calls[2][1]["properties"] == ["file", "year", "genre", "playcount"]
         assert "GetSongs" not in "".join(name for name, _ in rig.calls)
 
         resume, nxt, later = rig.playlist.items
@@ -218,6 +233,11 @@ class TestRestoreOrder:
         assert resume.art["thumb"] == "image://thumb/0"
         assert resume.art["fanart"] == "image://fan/0"
         assert resume.props["StartOffset"] == "30.0"
+        assert resume.tag.year == 1977
+        assert resume.tag.genres == ["Rock"]
+        assert resume.tag.playcount == 4
+        assert later.tag.year == 1977
+        assert later.tag.playcount == 4
 
         assert "dbid" not in (nxt.info[1] if nxt.info else {})
         # Both later tracks are matched after play. Art was asked for the
@@ -240,8 +260,8 @@ class TestRestoreOrder:
         assert [call[1]["songid"] for call in rig.calls] == [102, 103, 100, 101]
         assert rig.events[1] == "play"
         assert "art" in rig.calls[1][1]["properties"]
-        assert rig.calls[2][1]["properties"] == ["file"]
-        assert rig.calls[3][1]["properties"] == ["file"]
+        assert rig.calls[2][1]["properties"] == ["file", "year", "genre", "playcount"]
+        assert rig.calls[3][1]["properties"] == ["file", "year", "genre", "playcount"]
         assert [item.tag.dbid for item in rig.playlist.items] == [100, 101, 102, 103]
         assert all(item.props.get(PENDING, "") == "" for item in rig.playlist.items)
 
@@ -258,6 +278,9 @@ class TestRestoreOrder:
             7: {
                 "songid": 7,
                 "file": tracks[0].file,
+                "year": 1980,
+                "genre": ["Metal"],
+                "playcount": 2,
                 "art": {"clearlogo": "image://right/"},
             },
         }
@@ -276,6 +299,9 @@ class TestRestoreOrder:
         item = rig.playlist.items[0]
         assert item.info is not None and item.info[1]["dbid"] == "7"
         assert item.art["clearlogo"] == "image://right/"
+        assert item.tag.year == 1980
+        assert item.tag.genres == ["Metal"]
+        assert item.tag.playcount == 2
         assert item.props.get("StartOffset") is None  # 1s is below the offset
 
     def test_a_local_file_is_not_looked_up(self, monkeypatch: Any) -> None:
