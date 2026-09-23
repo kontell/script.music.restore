@@ -76,6 +76,9 @@ class FakeItem:
         self.info: Optional[Tuple[str, Dict[str, str]]] = None
         self.tag = FakeTag()
 
+    def setLabel(self, label: str) -> None:
+        self.label = label
+
     def setPath(self, path: str) -> None:
         self.path = path
 
@@ -115,7 +118,9 @@ class FakePlaylist:
     def clear(self) -> None:
         self.items.clear()
 
-    def add(self, url: str, item: FakeItem, index: int = -1) -> None:
+    def add(self, url: str, item: Optional[FakeItem] = None, index: int = -1) -> None:
+        if item is None:
+            item = FakeItem(label=url)
         item.setPath(url)
         self.items.append(item)
 
@@ -239,9 +244,9 @@ class TestRestoreOrder:
         assert later.tag.year == 1977
         assert later.tag.playcount == 4
 
-        assert "dbid" not in (nxt.info[1] if nxt.info else {})
         # Both later tracks are matched after play. Art was asked for the
         # next one only.
+        assert nxt.info is not None and nxt.info[1]["dbid"] == "101"
         assert nxt.tag.dbid == 101
         assert nxt.props.get(PENDING, "") == ""
         assert nxt.art["clearlogo"] == "image://logo/101"
