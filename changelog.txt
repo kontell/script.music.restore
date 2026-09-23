@@ -1,3 +1,8 @@
+v0.3.4
+• Restoring a long queue starts as soon as the playlist is built. Each song is matched to the library by the id already stored, and only as that song is about to play, instead of searching the whole music library for every track before the first note
+• Clearlogo and the artist and album images are loaded for the track that is about to play. Thumb and fanart still come from the saved queue
+• A restored queue no longer makes Kodi re-read a tag from every file as the player opens
+
 v0.3.3
 • A queue interrupted by a video is put away on the track you were actually on, rather than the first one. Kodi reports the position of whichever playlist the player has moved to, so a starting video called it track 1 for several seconds while the music was still playing — the track is now taken from the file coming out of the speakers instead
 

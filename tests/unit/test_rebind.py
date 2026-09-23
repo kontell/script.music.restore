@@ -4,8 +4,10 @@ from musicrestore.model import Track
 from musicrestore.rebind import (
     LOOKUP_FAILED,
     apply_library_hit,
+    art_map,
     jellyfin_audio_id,
     rebind_track,
+    same_library_song,
 )
 
 JID = "4d107b266443a4030a665dc3f016f4c5"
@@ -47,6 +49,30 @@ class TestJellyfinAudioId:
 
     def test_empty_is_none(self):
         assert jellyfin_audio_id("") is None
+
+
+class TestSameLibrarySong:
+    def test_matches_on_the_jellyfin_id_not_the_whole_url(self):
+        track = _track()
+        live = "http://other-host/Audio/%s/stream.mp3?static=true&api_key=x" % JID
+        assert same_library_song(track, live)
+
+    def test_rejects_a_reused_id(self):
+        other = "a" * 32
+        live = "http://jelly:8096/Audio/%s/stream.flac?static=true" % other
+        assert not same_library_song(_track(), live)
+
+    def test_a_local_file_keeps_its_songid(self):
+        local = _track(file="/music/track.flac", songid=12)
+        assert same_library_song(local, "")
+
+    def test_art_map_drops_empty_entries(self):
+        assert art_map({"art": {"clearlogo": "image://logo/", "banner": ""}}) == {
+            "clearlogo": "image://logo/"
+        }
+
+    def test_art_map_ignores_a_non_map(self):
+        assert art_map({"art": "nope"}) == {}
 
 
 class TestRebindTrack:
