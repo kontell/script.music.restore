@@ -3,7 +3,13 @@
 from typing import Any, Dict, List, Optional, Tuple
 
 from musicrestore.model import QueueRecord, Track
-from musicrestore.restore import PENDING, SONGID, confirm_playlist_slot, restore
+from musicrestore.restore import (
+    PENDING,
+    SONGID,
+    confirmation_order,
+    confirm_playlist_slot,
+    restore,
+)
 
 
 def _url(n: int) -> str:
@@ -190,17 +196,19 @@ class TestRestoreOrder:
 
         assert restore(_record(tracks), from_track_start=False) is True
 
-        # One details read for the resume track, then play, then the next track.
+        # The resume track before play, then the rest in order once audio
+        # has started. Only the next track asks for art.
         assert rig.events == [
             "AudioLibrary.GetSongDetails",
             "play",
             "AudioLibrary.GetSongDetails",
+            "AudioLibrary.GetSongDetails",
         ]
         assert rig.player.started == 0
-        assert rig.calls[0][1]["songid"] == 100
-        assert rig.calls[1][1]["songid"] == 101
+        assert [call[1]["songid"] for call in rig.calls] == [100, 101, 102]
         assert "art" in rig.calls[0][1]["properties"]
         assert "art" in rig.calls[1][1]["properties"]
+        assert rig.calls[2][1]["properties"] == ["file"]
         assert "GetSongs" not in "".join(name for name, _ in rig.calls)
 
         resume, nxt, later = rig.playlist.items
@@ -212,14 +220,30 @@ class TestRestoreOrder:
         assert resume.props["StartOffset"] == "30.0"
 
         assert "dbid" not in (nxt.info[1] if nxt.info else {})
-        # Confirmed after play, so the id is on the tag and the item is no
-        # longer pending. The one after it is still waiting.
+        # Both later tracks are matched after play. Art was asked for the
+        # next one only.
         assert nxt.tag.dbid == 101
         assert nxt.props.get(PENDING, "") == ""
         assert nxt.art["clearlogo"] == "image://logo/101"
-        assert later.props[PENDING] == "1"
-        assert later.tag.dbid is None
+        assert later.tag.dbid == 102
+        assert later.props.get(PENDING, "") == ""
         assert "clearlogo" not in later.art
+
+    def test_the_walk_wraps_to_the_tracks_before_the_one_that_started(
+        self, monkeypatch: Any
+    ) -> None:
+        tracks = [_track(n, 100 + n) for n in range(4)]
+        rig = Rig(monkeypatch, _rows(*tracks))
+
+        assert restore(_record(tracks, position=2, tick=40.0)) is True
+
+        assert [call[1]["songid"] for call in rig.calls] == [102, 103, 100, 101]
+        assert rig.events[1] == "play"
+        assert "art" in rig.calls[1][1]["properties"]
+        assert rig.calls[2][1]["properties"] == ["file"]
+        assert rig.calls[3][1]["properties"] == ["file"]
+        assert [item.tag.dbid for item in rig.playlist.items] == [100, 101, 102, 103]
+        assert all(item.props.get(PENDING, "") == "" for item in rig.playlist.items)
 
     def test_a_reused_songid_is_found_by_the_path_scan(self, monkeypatch: Any) -> None:
         tracks = [_track(1, 50)]
@@ -300,6 +324,20 @@ class TestRestoreOrder:
         assert resume.props[PENDING] == "1"
         assert nxt.props[PENDING] == "1"
         assert nxt.tag.dbid is None
+
+
+class TestConfirmationOrder:
+    def test_starts_at_the_next_track_and_wraps(self) -> None:
+        assert confirmation_order(5, 2) == [3, 4, 0, 1]
+
+    def test_from_the_top_goes_straight_to_the_end(self) -> None:
+        assert confirmation_order(3, 0) == [1, 2]
+
+    def test_the_last_track_wraps_to_the_start(self) -> None:
+        assert confirmation_order(4, 3) == [0, 1, 2]
+
+    def test_a_single_track_has_nothing_left(self) -> None:
+        assert confirmation_order(1, 0) == []
 
 
 class TestConfirmLater:

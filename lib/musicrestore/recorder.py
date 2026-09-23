@@ -294,12 +294,12 @@ class Recorder(xbmc.Monitor):
         return index
 
     def _confirm_near(self, index: int) -> None:
-        """Point the playing track and the next one at the live library row.
+        """Retry a song id the post-play walk could not settle.
 
-        Restore leaves every Jellyfin track but the resume one pending, so
-        this is what checks them as they come up. An item that is not
-        pending costs a property read. Runs on the service thread, outside
-        the sample lock, because the check is a library call.
+        That walk covers the queue. This only sees items still pending,
+        which is a lookup that failed. An item that is not pending costs a
+        property read. Runs on the service thread, outside the sample lock,
+        because the check is a library call.
         """
         try:
             size = int(self._playlist.size())

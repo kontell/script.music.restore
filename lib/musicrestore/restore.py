@@ -16,8 +16,10 @@ The playlist is built from the record and started immediately. Searching the
 music library for every track first is what made a long queue sit there: one
 ``AudioLibrary.GetSongs`` path scan per song, each opening the database and
 filling an art map, before ``play`` was called. The stored song id is checked
-with ``GetSongDetails`` for the track about to play, and a path scan only when
-that id now names a different song. Later tracks wait until they are next.
+with ``GetSongDetails`` for the track that is starting, and a path scan only
+when that id now names a different song. Once playback is going, the rest of
+the queue is checked the same way, from the next track through to the end and
+then from the top up to the one that started.
 """
 
 import time
@@ -231,6 +233,19 @@ def _stamp(item: xbmcgui.ListItem, track: Track, art: Optional[Dict[str, str]]) 
     item.setProperty(PENDING, "")
 
 
+def confirmation_order(count: int, started: int) -> List[int]:
+    """Every index except ``started``, beginning at the next track.
+
+    Playback has already started at ``started``. The walk continues to the
+    end of the queue and then from the top up to the track that started, so
+    the song about to play is settled first and the rest of the queue is
+    still covered.
+    """
+    if count <= 1 or not 0 <= started < count:
+        return []
+    return list(range(started + 1, count)) + list(range(started))
+
+
 def confirm_playlist_slot(playlist: xbmc.PlayList, index: int, with_art: bool) -> None:
     """Confirm one queued item, if restore left it pending.
 
@@ -337,10 +352,20 @@ def restore(
     )
     xbmc.Player().play(playlist, startpos=position)
 
-    # The following track, while this one plays, so it is ready when it starts.
-    if position + 1 < len(tracks):
-        confirm_playlist_slot(playlist, position + 1, with_art=True)
-
+    # Pause before the walk. A queue restored paused should not keep playing
+    # while the remaining song ids are checked.
     if start_paused:
         _pause_once_playing()
+
+    # The track that is playing was checked above. Art for the one about to
+    # play; the rest are an id check only, or the per-track art cost comes back.
+    order = confirmation_order(len(tracks), position)
+    for place, index in enumerate(order):
+        confirm_playlist_slot(playlist, index, with_art=(place == 0))
+    if order:
+        log.info(
+            "matched %d later track(s), starting from %d",
+            len(order),
+            order[0],
+        )
     return True
