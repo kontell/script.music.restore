@@ -76,6 +76,9 @@ class FakeItem:
         self.info: Optional[Tuple[str, Dict[str, str]]] = None
         self.tag = FakeTag()
 
+    def setLabel(self, label: str) -> None:
+        self.label = label
+
     def setPath(self, path: str) -> None:
         self.path = path
 
@@ -175,6 +178,12 @@ class Rig:
                         song.pop("art", None)
                     return {"songs": [song]}, None
             return {"songs": []}, None
+        if method == "Playlist.Add":
+            for entry in params["item"]:
+                item = FakeItem()
+                item.setPath(entry["file"])
+                self.playlist.items.append(item)
+            return "OK", None  # type: ignore[return-value]
         if method == "Player.PlayPause":
             return {"speed": 0}, None
         raise AssertionError(method)
@@ -211,19 +220,27 @@ class TestRestoreOrder:
 
         assert restore(_record(tracks), from_track_start=False) is True
 
-        # The resume track before play, then the rest in order once audio
-        # has started. Only the next track asks for art.
+        # One details read, then a single Playlist.Add, then play, then the
+        # rest. Only the next track asks for art.
         assert rig.events == [
             "AudioLibrary.GetSongDetails",
+            "Playlist.Add",
             "play",
             "AudioLibrary.GetSongDetails",
             "AudioLibrary.GetSongDetails",
         ]
         assert rig.player.started == 0
-        assert [call[1]["songid"] for call in rig.calls] == [100, 101, 102]
-        assert "art" in rig.calls[0][1]["properties"]
-        assert "art" in rig.calls[1][1]["properties"]
-        assert rig.calls[2][1]["properties"] == ["file", "year", "genre", "playcount"]
+        details = [
+            call for call in rig.calls if call[0] == "AudioLibrary.GetSongDetails"
+        ]
+        assert [call[1]["songid"] for call in details] == [100, 101, 102]
+        added = next(call for call in rig.calls if call[0] == "Playlist.Add")
+        assert [entry["file"] for entry in added[1]["item"]] == [
+            track.file for track in tracks
+        ]
+        assert "art" in details[0][1]["properties"]
+        assert "art" in details[1][1]["properties"]
+        assert details[2][1]["properties"] == ["file", "year", "genre", "playcount"]
         assert "GetSongs" not in "".join(name for name, _ in rig.calls)
 
         resume, nxt, later = rig.playlist.items
@@ -239,9 +256,9 @@ class TestRestoreOrder:
         assert later.tag.year == 1977
         assert later.tag.playcount == 4
 
-        assert "dbid" not in (nxt.info[1] if nxt.info else {})
         # Both later tracks are matched after play. Art was asked for the
         # next one only.
+        assert nxt.info is not None and nxt.info[1]["dbid"] == "101"
         assert nxt.tag.dbid == 101
         assert nxt.props.get(PENDING, "") == ""
         assert nxt.art["clearlogo"] == "image://logo/101"
@@ -257,11 +274,14 @@ class TestRestoreOrder:
 
         assert restore(_record(tracks, position=2, tick=40.0)) is True
 
-        assert [call[1]["songid"] for call in rig.calls] == [102, 103, 100, 101]
-        assert rig.events[1] == "play"
-        assert "art" in rig.calls[1][1]["properties"]
-        assert rig.calls[2][1]["properties"] == ["file", "year", "genre", "playcount"]
-        assert rig.calls[3][1]["properties"] == ["file", "year", "genre", "playcount"]
+        details = [
+            call for call in rig.calls if call[0] == "AudioLibrary.GetSongDetails"
+        ]
+        assert [call[1]["songid"] for call in details] == [102, 103, 100, 101]
+        assert rig.events[2] == "play"
+        assert "art" in details[1][1]["properties"]
+        assert details[2][1]["properties"] == ["file", "year", "genre", "playcount"]
+        assert details[3][1]["properties"] == ["file", "year", "genre", "playcount"]
         assert [item.tag.dbid for item in rig.playlist.items] == [100, 101, 102, 103]
         assert all(item.props.get(PENDING, "") == "" for item in rig.playlist.items)
 
@@ -291,6 +311,7 @@ class TestRestoreOrder:
         assert [name for name, _ in rig.calls] == [
             "AudioLibrary.GetSongDetails",
             "AudioLibrary.GetSongs",
+            "Playlist.Add",
         ]
         scan = rig.calls[1][1]
         assert scan["includesingles"] is True
@@ -316,7 +337,7 @@ class TestRestoreOrder:
 
         assert restore(_record([local], tick=10.0)) is True
 
-        assert rig.calls == []
+        assert [name for name, _ in rig.calls] == ["Playlist.Add"]
         assert rig.player.started == 0
         item = rig.playlist.items[0]
         assert item.info is not None and item.info[1]["dbid"] == "4"
@@ -333,12 +354,15 @@ class TestRestoreOrder:
     ) -> None:
         tracks = [_track(1, 50), _track(2, 51)]
 
+        rig = Rig(monkeypatch, {})
+
         def down(
             method: str, **params: Any
         ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+            if method == "Playlist.Add":
+                return rig.invoke(method, **params)
             return None, {"message": "down"}
 
-        rig = Rig(monkeypatch, {})
         monkeypatch.setattr(restore_mod.jsonrpc, "invoke", down)
 
         assert restore(_record(tracks)) is True

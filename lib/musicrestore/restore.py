@@ -12,14 +12,14 @@ and is read by the audio player as its start time, so the track opens already
 seeked — no seek call afterwards, and none of the audible jump from the
 beginning that a play-then-seek gives.
 
-The playlist is built from the record and started immediately. Searching the
-music library for every track first is what made a long queue sit there: one
-``AudioLibrary.GetSongs`` path scan per song, each opening the database and
-filling an art map, before ``play`` was called. The stored song id is checked
-with ``GetSongDetails`` for the track that is starting, and a path scan only
-when that id now names a different song. Once playback is going, the rest of
-the queue is checked the same way, from the next track through to the end and
-then from the top up to the one that started.
+The files go onto the playlist in one ``Playlist.Add``. Building a
+``ListItem`` per track in Python is what made a long queue sit there on a
+slow device: each call into Kodi drops and retakes the interpreter lock.
+The stored song id is checked with ``GetSongDetails`` for the track that is
+starting, and a path scan only when that id now names a different song. Once
+playback is going, the rest of the queue is checked the same way, from the
+next track through to the end and then from the top up to the one that
+started, and that is when those items get their tags and art.
 """
 
 import time
@@ -40,6 +40,9 @@ MIN_OFFSET = 5.0
 # How long to wait for playback before pausing a queue restored paused.
 PAUSE_TIMEOUT = 10.0
 PAUSE_STEP = 100  # ms
+
+# Playlist.Add answers before the app thread has inserted the items.
+ADD_TIMEOUT = 120.0
 
 # Set on a queued item whose song id has not been checked against the library
 # yet. The candidate id rides alongside it: stamping that id as the dbid
@@ -133,20 +136,25 @@ def _apply_facts(item: xbmcgui.ListItem, facts: SongFacts) -> None:
         tag.setPlayCount(facts.playcount)
 
 
-def _list_item(
+def _fill(
+    item: xbmcgui.ListItem,
     track: Track,
     library_art: Dict[str, str],
     stamp_songid: bool,
     pending: bool,
     facts: Optional[SongFacts] = None,
-) -> xbmcgui.ListItem:
-    item = xbmcgui.ListItem(label=track.title or track.file, offscreen=True)
+) -> None:
+    """Put the record, and any library facts, onto an item already queued.
+
+    ``setInfo`` is deprecated, and it is the call that marks the music tag
+    loaded. The InfoTagMusic setters do not, and an unloaded tag makes Kodi
+    open the music database and then the file for every queued item the
+    first time the player asks about it. One label is enough to set the
+    flag, so mediatype is always present.
+    """
+    if track.title:
+        item.setLabel(track.title)
     item.setPath(track.file)
-    # ``setInfo`` is deprecated, and it is the call that marks the music tag
-    # loaded. The InfoTagMusic setters do not, and an unloaded tag makes Kodi
-    # open the music database and then the file for every queued item the
-    # first time the player asks about it. One label is enough to set the
-    # flag, so mediatype is always present.
     info = {"mediatype": "song"}
     if track.title:
         info["title"] = track.title
@@ -162,11 +170,8 @@ def _list_item(
     if facts is not None:
         _apply_facts(item, facts)
     _apply_art(item, track, library_art)
-    if track.songid:
-        item.setProperty(SONGID, str(track.songid))
-    if pending:
-        item.setProperty(PENDING, "1")
-    return item
+    item.setProperty(SONGID, str(track.songid or ""))
+    item.setProperty(PENDING, "1" if pending else "")
 
 
 def _scan(item_id: str, with_art: bool) -> object:
@@ -322,6 +327,92 @@ def confirmation_order(count: int, started: int) -> List[int]:
     return list(range(started + 1, count)) + list(range(started))
 
 
+def _same_queued_file(queued: str, recorded: str) -> bool:
+    """True when a queued path is still the recorded one.
+
+    A library hit can rewrite a Jellyfin URL without changing the item id.
+    """
+    queued_id = rebind.jellyfin_audio_id(queued)
+    recorded_id = rebind.jellyfin_audio_id(recorded)
+    if queued_id or recorded_id:
+        return queued_id == recorded_id
+    return queued == recorded
+
+
+def _first_order_mismatch(
+    playlist: xbmc.PlayList, tracks: List[Track]
+) -> Optional[int]:
+    try:
+        if int(playlist.size()) < len(tracks):
+            return 0
+    except Exception:  # noqa: BLE001
+        return 0
+    for index, track in enumerate(tracks):
+        try:
+            item = playlist[index]  # type: ignore[index]
+        except Exception:  # noqa: BLE001
+            return index
+        if not _same_queued_file(item.getPath() or "", track.file):
+            return index
+    return None
+
+
+def _queue_files(playlist: xbmc.PlayList, files: List[str]) -> bool:
+    """Put every file on the music playlist in one call.
+
+    ``Playlist.Add`` of an array of song ids sorts the list by track number.
+    An array of file paths does not: after the first file,
+    ``CFileItemList::Sort`` sees the list is already sorted by track number
+    and returns, so the rest stay in the order they were given. The call
+    answers before the app thread has inserted anything, so wait for the
+    length.
+    """
+    playlist.clear()
+    queued = jsonrpc.call(
+        "Playlist.Add",
+        playlistid=MUSIC_PLAYLIST,
+        item=[{"file": path} for path in files],
+    )
+    if queued is None:
+        log.error("Playlist.Add failed")
+        return False
+    deadline = time.monotonic() + ADD_TIMEOUT
+    while int(playlist.size()) < len(files):
+        if time.monotonic() >= deadline:
+            log.error("playlist stopped at %d of %d", playlist.size(), len(files))
+            return False
+        xbmc.sleep(PAUSE_STEP)
+    return True
+
+
+def _confirm_known(
+    playlist: xbmc.PlayList, index: int, track: Track, with_art: bool
+) -> None:
+    """Match one known record track to the item now sitting at ``index``."""
+    try:
+        item = playlist[index]  # type: ignore[index]
+    except Exception:  # noqa: BLE001
+        return
+    if not rebind.jellyfin_audio_id(track.file):
+        _fill(item, track, {}, bool(track.songid), False, None)
+        return
+    confirmed = confirm_track(track, with_art)
+    if not confirmed.settled:
+        # No dbid until the library can be asked. A guessed one is how a
+        # repaired library gets the wrong song.
+        _fill(item, track, {}, False, True, None)
+        return
+    _note_rebind(track, confirmed.track)
+    _fill(
+        item,
+        confirmed.track,
+        confirmed.art if with_art else {},
+        bool(confirmed.track.songid),
+        False,
+        confirmed.facts,
+    )
+
+
 def confirm_playlist_slot(playlist: xbmc.PlayList, index: int, with_art: bool) -> None:
     """Confirm one queued item, if restore left it pending.
 
@@ -398,26 +489,29 @@ def restore(
             resume_facts = confirmed.facts
 
     playlist = xbmc.PlayList(MUSIC_PLAYLIST)
-    playlist.clear()
-    for index, track in enumerate(tracks):
-        is_resume = index == position
-        jelly = rebind.jellyfin_audio_id(track.file) is not None
-        # The resume track is the one about to play, so it carries a song id
-        # now. A check that could not be made still stamps the recorded id
-        # and stays pending, which is the same "could not ask" result as
-        # before. Every other Jellyfin track waits.
-        stamp_songid = (not jelly) or is_resume
-        pending = jelly and not (is_resume and resume_settled)
-        item = _list_item(
-            track,
-            resume_art if is_resume else {},
-            stamp_songid,
-            pending,
-            resume_facts if is_resume else None,
-        )
-        if is_resume and tick >= MIN_OFFSET:
-            item.setProperty("StartOffset", str(tick))
-        playlist.add(track.file, item)
+    if not _queue_files(playlist, [track.file for track in tracks]):
+        return False
+    mismatch = _first_order_mismatch(playlist, tracks)
+    if mismatch is not None:
+        log.error("playlist order differs from the record at %d", mismatch)
+
+    try:
+        current = playlist[position]  # type: ignore[index]
+    except Exception:  # noqa: BLE001
+        log.error("resume track %d is not on the playlist", position)
+        return False
+    resume = tracks[position]
+    resume_jelly = rebind.jellyfin_audio_id(resume.file) is not None
+    _fill(
+        current,
+        resume,
+        resume_art,
+        bool(resume.songid),
+        resume_jelly and not resume_settled,
+        resume_facts if resume_settled else None,
+    )
+    if tick >= MIN_OFFSET:
+        current.setProperty("StartOffset", str(tick))
 
     log.info(
         "restoring %d track(s) from position %d at %.0fs in %.0fms"
@@ -445,7 +539,7 @@ def restore(
     # play; the rest are an id check only, or the per-track art cost comes back.
     order = confirmation_order(len(tracks), position)
     for place, index in enumerate(order):
-        confirm_playlist_slot(playlist, index, with_art=(place == 0))
+        _confirm_known(playlist, index, tracks[index], with_art=(place == 0))
     if order:
         log.info(
             "matched %d later track(s), starting from %d",
