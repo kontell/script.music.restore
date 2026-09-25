@@ -100,6 +100,11 @@ class TestRoundTrip:
             songid=7,
             thumb="image://x/",
             fanart="image://back/",
+            year=1986,
+            genres=("Rock", "Pop"),
+            playcount=4,
+            tracknumber=2,
+            discnumber=1,
         )
         assert Track.from_dict(track.to_dict()) == track
 

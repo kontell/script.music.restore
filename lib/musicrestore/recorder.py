@@ -33,8 +33,9 @@ from collections import deque
 from typing import Any, Deque, Dict, List, Optional
 
 import xbmc
+import xbmcgui
 
-from . import history, jsonrpc, logging as log, restore, settings
+from . import history, jsonrpc, logging as log, rebind, restore, settings
 from .model import QueueRecord, Track
 
 MUSIC_PLAYLIST = 0
@@ -48,6 +49,11 @@ SNAPSHOT_PROPERTIES = [
     "albumartist",
     "album",
     "duration",
+    "year",
+    "genre",
+    "playcount",
+    "track",
+    "disc",
     "thumbnail",
     # The flat field rather than the whole "art" map: fanart is the one piece
     # a restore cannot get back on its own, and asking for "art" would put
@@ -104,6 +110,9 @@ class Recorder(xbmc.Monitor):
         # after Kodi has deregistered the addon, and constructing an Addon then
         # throws "Unknown addon id". Refreshed by onSettingsChanged.
         self._keep = settings.keep()
+        self._restore_ready = ""
+        self._source_marker = ""
+        self._source_record: Optional[QueueRecord] = None
 
     def onSettingsChanged(self) -> None:
         self._keep = settings.keep()
@@ -179,9 +188,61 @@ class Recorder(xbmc.Monitor):
             for item in raw
             if isinstance(item, dict) and item.get("file")
         ]
+        source = self._restore_source()
+        if source is not None and len(source.tracks) == len(tracks):
+            same = all(
+                saved.file == live.file
+                or (
+                    rebind.jellyfin_audio_id(saved.file)
+                    and rebind.jellyfin_audio_id(saved.file)
+                    == rebind.jellyfin_audio_id(live.file)
+                )
+                for saved, live in zip(source.tracks, tracks)
+            )
+            if same:
+                tracks = [
+                    Track(
+                        file=live.file,
+                        title=(
+                            live.title
+                            if live.title and "://" not in live.title
+                            else saved.title
+                        ),
+                        artist=live.artist or saved.artist,
+                        album=live.album or saved.album,
+                        duration=live.duration or saved.duration,
+                        songid=(
+                            live.songid
+                            if rebind.jellyfin_audio_id(saved.file)
+                            else (live.songid or saved.songid)
+                        ),
+                        thumb=live.thumb or saved.thumb,
+                        fanart=live.fanart or saved.fanart,
+                        year=live.year if live.songid else saved.year,
+                        genres=live.genres if live.songid else saved.genres,
+                        playcount=live.playcount if live.songid else saved.playcount,
+                        tracknumber=(
+                            live.tracknumber if live.songid else saved.tracknumber
+                        ),
+                        discnumber=live.discnumber if live.songid else saved.discnumber,
+                    )
+                    for saved, live in zip(source.tracks, tracks)
+                ]
+                try:
+                    xbmcgui.Window(10000).setProperty(restore.RESTORE_SOURCE, "")
+                except Exception:  # noqa: BLE001
+                    pass
+
+        def identity(track: Track) -> str:
+            item_id = rebind.jellyfin_audio_id(track.file)
+            return "jellyfin:%s" % item_id if item_id else track.key
+
         with self._lock:
-            if [t.key for t in tracks] == [t.key for t in self._items]:
-                return  # same queue — keep the position we already have
+            if [identity(t) for t in tracks] == [identity(t) for t in self._items]:
+                self._items = (
+                    tracks  # refresh facts without losing the sampled position
+                )
+                return
             self._items = tracks
             self._position = 0
             self._tick = 0.0
@@ -190,13 +251,94 @@ class Recorder(xbmc.Monitor):
             self._armed = False
         log.debug("queue is now %d track(s)", len(tracks))
 
+    def _restore_source(self) -> Optional[QueueRecord]:
+        """Saved facts for a bare queue being restored in another interpreter."""
+        try:
+            marker = xbmc.getInfoLabel(
+                "Window(home).Property(%s)" % restore.RESTORE_SOURCE
+            )
+            if marker == self._source_marker:
+                return self._source_record
+            self._source_marker = marker
+            self._source_record = None
+            saved, size = marker.split(":", 1)
+            saved_at = float(saved)
+            count = int(size)
+        except (AttributeError, TypeError, ValueError):
+            return None
+        self._source_record = next(
+            (
+                record
+                for record in history.load()
+                if record.total == count and abs(record.saved - saved_at) < 0.001
+            ),
+            None,
+        )
+        return self._source_record
+
+    def _seed_restore_source(self, playing: str) -> None:
+        """Keep the full saved shadow while playback starts from one item.
+
+        The native playlist is added in the background. If playback stops or
+        is replaced during that interval, the recorder still has the complete
+        restored queue and the sampled position to save.
+        """
+        if not self._restore_in_progress():
+            return
+        source = self._restore_source()
+        if source is None or not source.tracks:
+            return
+        playing_id = rebind.jellyfin_audio_id(playing)
+        if not any(
+            track.file == playing
+            or (playing_id and rebind.jellyfin_audio_id(track.file) == playing_id)
+            for track in source.tracks
+        ):
+            return
+        with self._lock:
+            if self._items:
+                return
+            self._items = list(source.tracks)
+            self._position = source.position
+            self._tick = 0.0
+            self._armed = False
+
+    def _restore_in_progress(self) -> bool:
+        """True while restore is replacing the playlist.
+
+        A refresh in that window would store a half-built queue, and the next
+        stop would save it in place of the library songs.
+        """
+        try:
+            return (
+                xbmc.getInfoLabel("Window(home).Property(%s)" % restore.BUILDING) == "1"
+            )
+        except Exception:  # noqa: BLE001
+            return False
+
     def _maybe_refresh(self) -> None:
+        try:
+            ready = xbmc.getInfoLabel(
+                "Window(home).Property(%s)" % restore.RESTORE_READY
+            )
+        except Exception:  # noqa: BLE001
+            ready = ""
+        if ready and ready != self._restore_ready:
+            self._restore_ready = ready
+            with self._lock:
+                self._refresh_at = time.time()
         with self._lock:
             due = self._refresh_at is not None and time.time() >= self._refresh_at
             if due:
                 self._refresh_at = None
-        if due:
-            self._refresh()
+        if not due:
+            return
+        if self._restore_in_progress():
+            with self._lock:
+                if self._refresh_at is None:
+                    self._refresh_at = time.time() + REFRESH_DELAY
+            return
+        self._refresh()
 
     def _settle_stop(self) -> None:
         """Decide what a Player.OnStop meant, now the grace period is up.
@@ -284,6 +426,7 @@ class Recorder(xbmc.Monitor):
             return None
         if position < 0:
             return None
+        self._seed_restore_source(playing)
         with self._lock:
             index = self._locate(playing, position, tick)
             if index is None:
@@ -294,13 +437,21 @@ class Recorder(xbmc.Monitor):
         return index
 
     def _confirm_near(self, index: int) -> None:
-        """Retry a song id the post-play walk could not settle.
+        """Retry a file restore queued while the library could not be asked.
 
-        That walk covers the queue. This only sees items still pending,
-        which is a lookup that failed. An item that is not pending costs a
-        property read. Runs on the service thread, outside the sample lock,
-        because the check is a library call.
+        A song id that resolved is already a library item. This only sees
+        items still pending. An item that is not pending costs a property
+        read. Runs on the service thread, outside the sample lock, because
+        the check is a library call.
         """
+        try:
+            if (
+                xbmc.getInfoLabel("Window(home).Property(%s)" % restore.ENRICHING)
+                == "1"
+            ):
+                return
+        except Exception:  # noqa: BLE001 - a missing window is not fatal
+            pass
         try:
             size = int(self._playlist.size())
         except Exception:  # noqa: BLE001

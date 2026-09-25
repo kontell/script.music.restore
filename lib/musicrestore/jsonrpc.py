@@ -7,6 +7,7 @@ at abort time must not stop the final snapshot being written.
 """
 
 import json
+import time
 from typing import Any, Dict, Optional, Tuple
 
 import xbmc
@@ -22,18 +23,37 @@ def invoke(
     ``error`` is the JSON-RPC error object, or None when the call returned a
     result. A transport failure is reported as an error object too, so callers
     can tell "Kodi answered, and the id is gone" from "Kodi could not be asked"
-    without treating both as an empty result. Does not log: a missing song is
-    an expected answer during a rebind, and the caller decides whether it is
-    worth a line.
+    without treating both as an empty result. Missing songs are expected during
+    a rebind, so response contents are never logged. The GetSongs timing line
+    reports only durations and response size.
     """
+    serializing = time.perf_counter()
     request = json.dumps(
         {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
     )
+    serialized = time.perf_counter()
     try:
         raw = xbmc.executeJSONRPC(request)
+        executed = time.perf_counter()
         response: Dict[str, Any] = json.loads(raw)
+        decoded = time.perf_counter()
     except Exception as exc:  # noqa: BLE001 - see module docstring
+        if method == "AudioLibrary.GetSongs":
+            log.info(
+                "JSON-RPC GetSongs failed after %.0fms",
+                (time.perf_counter() - serializing) * 1000.0,
+            )
         return None, {"message": str(exc)}
+
+    if method == "AudioLibrary.GetSongs":
+        log.info(
+            "JSON-RPC GetSongs encode %.0fms, Kodi call %.0fms, decode %.0fms,"
+            " response %d bytes",
+            (serialized - serializing) * 1000.0,
+            (executed - serialized) * 1000.0,
+            (decoded - executed) * 1000.0,
+            len(raw),
+        )
 
     if "error" in response:
         error = response["error"]

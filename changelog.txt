@@ -1,6 +1,7 @@
 v0.3.4
-- Significant time to playback start improvement.
-- Song information on a restored track is now the same as per a track queued from the library
+- The playing song and the next song are matched to the current music library and fully tagged before playback starts. Kodi adds the rest as native library songs while playback continues.
+- Large queues use bounded, indexed path lookups rather than a SQL expression with one clause per song. A library revision cache speeds repeat restores, with paged JSON-RPC as a fallback.
+- A saved title that is only a stream URL is replaced by the library title. A half-built playlist is not saved over the queue it came from.
 
 v0.3.3
 - A queue interrupted by a video is put away on the track you were actually on, rather than the first one.

@@ -122,6 +122,27 @@ class TestRebindTrack:
         assert applied.album == "The Album"
         assert applied.songid == 3
 
+    def test_apply_library_hit_replaces_a_url_stored_as_the_title(self):
+        live = {
+            "songid": 3,
+            "file": "http://x/Audio/%s/stream.mp3" % JID,
+            "title": "Server Title",
+            "artist": ["Server Artist"],
+            "album": "Server Album",
+            "duration": 180,
+        }
+        recorded = _track(
+            title="http://x/Audio/%s/stream.mp3" % JID,
+            artist="",
+            album="",
+            duration=0,
+        )
+        applied = apply_library_hit(recorded, live)
+        assert applied.title == "Server Title"
+        assert applied.artist == "Server Artist"
+        assert applied.album == "Server Album"
+        assert applied.duration == 180
+
     def test_apply_library_hit_fills_missing_fanart_from_the_library(self):
         # Records written before fanart was captured have none; the library
         # row is where a restore of one gets its backdrop.

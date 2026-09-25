@@ -40,6 +40,11 @@ class Track:
     songid: Optional[int] = None
     thumb: str = ""
     fanart: str = ""
+    year: int = 0
+    genres: Tuple[str, ...] = ()
+    playcount: int = 0
+    tracknumber: int = 0
+    discnumber: int = 0
 
     @property
     def key(self) -> str:
@@ -56,10 +61,23 @@ class Track:
             data["duration"] = self.duration
         if self.songid:
             data["songid"] = self.songid
+        for name in ("year", "playcount", "tracknumber", "discnumber"):
+            value = getattr(self, name)
+            if value:
+                data[name] = value
+        if self.genres:
+            data["genres"] = list(self.genres)
         return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Track":
+        raw_genres = data.get("genres")
+        if isinstance(raw_genres, list):
+            genres = tuple(str(value) for value in raw_genres if value)
+        elif isinstance(raw_genres, str) and raw_genres:
+            genres = (raw_genres,)
+        else:
+            genres = ()
         return cls(
             file=str(data.get("file", "")),
             title=str(data.get("title", "")),
@@ -69,6 +87,11 @@ class Track:
             songid=data.get("songid") or None,
             thumb=str(data.get("thumb", "")),
             fanart=str(data.get("fanart", "")),
+            year=int(data.get("year", 0) or 0),
+            genres=genres,
+            playcount=int(data.get("playcount", 0) or 0),
+            tracknumber=int(data.get("tracknumber", 0) or 0),
+            discnumber=int(data.get("discnumber", 0) or 0),
         )
 
     @classmethod
@@ -86,6 +109,13 @@ class Track:
         # arrived.
         raw_art = item.get("art")
         art: Dict[str, Any] = raw_art if isinstance(raw_art, dict) else {}
+        raw_genres = item.get("genre") or item.get("genres") or []
+        if isinstance(raw_genres, list):
+            genres = tuple(str(value) for value in raw_genres if value)
+        elif isinstance(raw_genres, str):
+            genres = (raw_genres,) if raw_genres else ()
+        else:
+            genres = ()
         return cls(
             file=str(item.get("file", "")),
             title=str(item.get("title") or item.get("label") or ""),
@@ -97,6 +127,11 @@ class Track:
             songid=int(songid) if songid else None,
             thumb=str(item.get("thumbnail") or art.get("thumb") or ""),
             fanart=str(item.get("fanart") or art.get("fanart") or ""),
+            year=int(item.get("year", 0) or 0),
+            genres=genres,
+            playcount=int(item.get("playcount", 0) or 0),
+            tracknumber=int(item.get("track", 0) or item.get("tracknumber", 0) or 0),
+            discnumber=int(item.get("disc", 0) or item.get("discnumber", 0) or 0),
         )
 
 
