@@ -6,11 +6,9 @@ old numbers — often for different tracks, because a repair walks newest-first.
 The file URL still names the Jellyfin item (``/Audio/<id>/`` or
 ``plugin://plugin.video.kofin/<library>/<id>/``), which survives the rebuild.
 
-The resume track is checked before it plays, and each later track as it
-becomes the next one. A stale ``setDbId`` would stamp the restored item onto
-whoever now occupies the old number — play counts, the info dialog, and
-anything else reading the music tag follow the wrong row. The stream URL
-itself is still right; the library link is what breaks.
+Restore checks a stored id before putting it on the queued item's music tag.
+A stale id would attach that item to whoever now occupies the number — play
+counts, the info dialog, and other tag readers follow the wrong row.
 """
 
 import re
@@ -29,6 +27,13 @@ Lookup = Callable[[str], Union[Dict[str, Any], None, object]]
 _JELLYFIN_AUDIO = re.compile(
     r"(?:/Audio/|plugin://plugin\.video\.kofin/[^/]+/)([0-9a-fA-F]{32})",
 )
+
+
+def _display(value: str) -> str:
+    """A recorded label worth showing. A stream URL stored as the title is not."""
+    if not value or "://" in value:
+        return ""
+    return value
 
 
 def jellyfin_audio_id(file: str) -> Optional[str]:
@@ -73,13 +78,18 @@ def apply_library_hit(track: Track, song: Dict[str, Any]) -> Track:
     live = Track.from_playlist_item(payload)
     return Track(
         file=live.file or track.file,
-        title=track.title or live.title,
-        artist=track.artist or live.artist,
-        album=track.album or live.album,
+        title=_display(track.title) or live.title,
+        artist=_display(track.artist) or live.artist,
+        album=_display(track.album) or live.album,
         duration=track.duration or live.duration,
         songid=live.songid,
         thumb=track.thumb or live.thumb,
         fanart=track.fanart or live.fanart,
+        year=live.year or track.year,
+        genres=live.genres or track.genres,
+        playcount=live.playcount if "playcount" in payload else track.playcount,
+        tracknumber=live.tracknumber or track.tracknumber,
+        discnumber=live.discnumber or track.discnumber,
     )
 
 
@@ -113,5 +123,10 @@ def rebind_track(track: Track, lookup: Lookup) -> Track:
             songid=None,
             thumb=track.thumb,
             fanart=track.fanart,
+            year=track.year,
+            genres=track.genres,
+            playcount=track.playcount,
+            tracknumber=track.tracknumber,
+            discnumber=track.discnumber,
         )
     return track

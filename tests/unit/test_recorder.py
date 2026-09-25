@@ -6,10 +6,12 @@ These build a recorder without touching Kodi — only the three fields
 ``_locate`` reads are set — and drive it through the sequences that matter.
 """
 
-from typing import List, Optional
+import threading
+from typing import Any, List, Optional
 
-from musicrestore.model import Track
+from musicrestore.model import QueueRecord, Track
 from musicrestore.recorder import Recorder
+import musicrestore.recorder as recorder_mod
 
 ALBUM = [
     "https://jelly/Audio/1/stream.flac",
@@ -25,6 +27,8 @@ def _recorder(files: List[str], position: int = 0, tick: float = 0.0) -> Recorde
     recorder._items = [Track(file=path, title=path[-10:]) for path in files]
     recorder._position = position
     recorder._tick = tick
+    recorder._source_marker = ""
+    recorder._source_record = None
     return recorder
 
 
@@ -97,3 +101,118 @@ class TestDuplicateTracks:
         recorder = _recorder(files, position=3, tick=60.0)
         # Track 1 is queued twice; a bogus 0 must not pick the first copy.
         assert _locate(recorder, ALBUM[0], 0, 61.0) == 2
+
+
+class TestRestoreHandoff:
+    def test_bare_playlist_uses_saved_metadata(self, monkeypatch: Any) -> None:
+        url = "https://jelly/Audio/%s/stream.flac" % ("a" * 32)
+        saved = Track(
+            file=url,
+            title="Saved title",
+            artist="Saved artist",
+            album="Saved album",
+            duration=320,
+            songid=42,
+            year=1986,
+            genres=("Rock",),
+        )
+        record = QueueRecord(tracks=[saved], saved=123.456)
+        recorder = _recorder([])
+        recorder._lock = threading.Lock()
+        monkeypatch.setattr(
+            recorder_mod.jsonrpc,
+            "call",
+            lambda *_args, **_kwargs: {
+                "items": [{"file": url, "label": url, "type": "unknown"}]
+            },
+        )
+        monkeypatch.setattr(recorder_mod.history, "load", lambda: [record])
+        monkeypatch.setattr(
+            recorder_mod.xbmc,
+            "getInfoLabel",
+            lambda _label: "123.456:1",
+        )
+        cleared: List[str] = []
+
+        class Window:
+            def __init__(self, _window_id: int) -> None:
+                pass
+
+            def setProperty(self, key: str, value: str) -> None:
+                cleared.append(key + "=" + value)
+
+        monkeypatch.setattr(recorder_mod.xbmcgui, "Window", Window)
+
+        recorder._refresh()
+
+        assert recorder._items[0].title == "Saved title"
+        assert recorder._items[0].artist == "Saved artist"
+        assert recorder._items[0].year == 1986
+        assert recorder._items[0].songid is None
+        assert "musicrestore.source=" in cleared
+
+    def test_playback_first_restore_seeds_full_shadow(self, monkeypatch: Any) -> None:
+        first = "https://jelly/Audio/%s/stream.flac" % ("a" * 32)
+        resumed = "https://jelly/Audio/%s/stream.flac" % ("b" * 32)
+        source = QueueRecord(
+            tracks=[Track(file=first), Track(file=resumed)],
+            position=1,
+            saved=123.456,
+        )
+        recorder = _recorder([])
+        recorder._lock = threading.Lock()
+        recorder._armed = False
+        monkeypatch.setattr(recorder, "_restore_in_progress", lambda: True)
+        monkeypatch.setattr(recorder, "_restore_source", lambda: source)
+
+        recorder._seed_restore_source(resumed)
+
+        assert [track.file for track in recorder._items] == [first, resumed]
+        assert recorder._position == 1
+        assert recorder._armed is False
+
+    def test_unrelated_playback_does_not_seed_restore_shadow(
+        self, monkeypatch: Any
+    ) -> None:
+        source = QueueRecord(tracks=[Track(file="/music/saved.flac")])
+        recorder = _recorder([])
+        recorder._lock = threading.Lock()
+        monkeypatch.setattr(recorder, "_restore_in_progress", lambda: True)
+        monkeypatch.setattr(recorder, "_restore_source", lambda: source)
+
+        recorder._seed_restore_source("/music/different.flac")
+
+        assert recorder._items == []
+
+    def test_final_facts_replace_shadow_without_losing_position(
+        self, monkeypatch: Any
+    ) -> None:
+        url = "https://jelly/Audio/%s/stream.flac" % ("b" * 32)
+        recorder = _recorder([url], position=0, tick=87.0)
+        recorder._lock = threading.Lock()
+        recorder._armed = True
+        monkeypatch.setattr(recorder, "_restore_source", lambda: None)
+        monkeypatch.setattr(
+            recorder_mod.jsonrpc,
+            "call",
+            lambda *_args, **_kwargs: {
+                "items": [
+                    {
+                        "file": url,
+                        "type": "song",
+                        "id": 7,
+                        "title": "Current title",
+                        "year": 1991,
+                        "genre": ["Jazz"],
+                    }
+                ]
+            },
+        )
+
+        recorder._refresh()
+
+        assert recorder._items[0].title == "Current title"
+        assert recorder._items[0].year == 1991
+        assert recorder._position == 0
+        assert recorder._tick == 87.0
+        assert recorder._armed is True

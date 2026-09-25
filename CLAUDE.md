@@ -30,15 +30,11 @@ History lives at `special://profile/addon_data/script.music.restore/queues.json`
 
 ## Restoring a queue
 
-`Player.Open` on a playlist ignores the resume option and starts at 0:00. Set `StartOffset` on the track that is starting. The audio player reads that as its start time.
+`restore.py` validates and fully tags the current and next tracks before starting playback. It applies `StartOffset` to the current track, starts those two items, then builds the rest of the queue while the player runs.
 
-Queue the files with `playlist.add(url)` and fill in only the track that is starting before `play`. A `ListItem` per track before play is several calls into Kodi, and each call drops and retakes the interpreter lock. On a slow device that dominates the wait. Titles, art, year, genre, play count and song ids for the other tracks are applied after playback has started, from the next track to the end and then from the top up to the one that started.
+The remaining tracks are mapped to current library song IDs through a revision-aware cache, an indexed read-only SQLite query, or paged JSON-RPC scans. Native `Playlist.Add` supplies library metadata for the following tracks; individual `Playlist.Insert` requests prepend the earlier tracks and preserve the playing position. Unresolved items are repaired from the saved record. The recorder keeps the saved queue as its shadow until the build finishes, so an interrupted build does not replace history with a partial queue.
 
-Do not replace that loop with one `Playlist.Add` of the file paths. For a music playlist that call looks every file up in the library before it returns, and a Jellyfin URL misses the lookup, so Kodi then tries to read the tag from the file. That was slower than the Python adds. Do not pass song ids to `Playlist.Add` either: that path sorts the list by track number.
-
-`setInfo("music", ...)` is deprecated, and it is the call that marks the music tag loaded. The `InfoTagMusic` setters do not. An unloaded tag makes Kodi open the music database, fail to find a Jellyfin URL, and then try to read the tag from the file, once per queued track.
-
-A kofin library repair reuses song ids, so a saved id can now belong to a different track. Check the id with `AudioLibrary.GetSongDetails` and keep it only when the returned file still contains the same Jellyfin item id. The path scan is the fallback for a miss or a reused id, not the first call for every track. Year, genre and play count come from that same row onto the tag. The saved thumb and fanart stay the ones from the record.
+For general Kodi behavior, see `../kodi-drive/README.md` and the kodi-drive skills.
 
 ## What not to add
 
