@@ -520,6 +520,9 @@ class Recorder(xbmc.Monitor):
         # A service restart (an addon enable/disable bounce) can land while
         # music is playing, so adopt whatever is already queued.
         self._refresh()
+        # Build the small dialog index for an existing history during service
+        # startup, so the first dialog open does not parse every saved track.
+        history.load_previews()
 
         if settings.restore_on_startup():
             self._restore_on_startup()

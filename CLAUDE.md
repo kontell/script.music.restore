@@ -27,6 +27,8 @@ Live capture and restore are not in CI. They need a real Kodi. Do not put a host
 | `tests/unit/` | Unit tests. No Kodi process |
 
 History lives at `special://profile/addon_data/script.music.restore/queues.json`.
+The dialog reads `queue_previews.json` beside it, a small rebuildable index, and
+loads the full history only when a row is selected.
 
 ## Restoring a queue
 

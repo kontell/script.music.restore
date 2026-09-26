@@ -207,6 +207,52 @@ class QueueRecord:
         )
 
 
+@dataclass(frozen=True)
+class QueuePreview:
+    """Everything the dialog needs before a queue is selected."""
+
+    saved: float
+    position: int
+    total: int
+    tick: float
+    finished: bool
+    thumb: str
+    title_id: int
+    title_args: Tuple[str, ...]
+
+    @property
+    def unplayed(self) -> int:
+        return max(0, self.total - self.position - 1)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "saved": self.saved,
+            "position": self.position,
+            "total": self.total,
+            "tick": self.tick,
+            "finished": self.finished,
+            "thumb": self.thumb,
+            "title_id": self.title_id,
+            "title_args": list(self.title_args),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "QueuePreview":
+        args = data.get("title_args")
+        if not isinstance(args, list):
+            raise ValueError("invalid preview title")
+        return cls(
+            saved=float(data["saved"]),
+            position=int(data["position"]),
+            total=int(data["total"]),
+            tick=float(data["tick"]),
+            finished=bool(data["finished"]),
+            thumb=str(data.get("thumb") or ""),
+            title_id=int(data["title_id"]),
+            title_args=tuple(str(arg) for arg in args),
+        )
+
+
 def playback_start(
     record: QueueRecord, from_track_start: bool = False
 ) -> Tuple[int, float]:

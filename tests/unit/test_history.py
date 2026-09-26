@@ -1,10 +1,11 @@
 """The store: duplicate suppression, ordering, the cap, and surviving junk."""
 
 import json
+from io import StringIO
 
 import pytest
 
-from musicrestore import history
+from musicrestore import history, naming
 from musicrestore.model import QueueRecord, Track
 
 
@@ -142,3 +143,70 @@ class TestLoad:
         history.add(record(keys=("a",)), keep=20)
         history.add(record(keys=("b",)), keep=20)
         assert history.count() == 2
+
+
+class TestPreviews:
+    def test_preview_keeps_the_rendered_row_and_store_precision(self):
+        saved = QueueRecord(
+            tracks=[
+                Track(file="/a", title="First", artist="Artist", album="Album"),
+                Track(
+                    file="/b",
+                    title="Second",
+                    artist="Artist",
+                    album="Album",
+                    thumb="art",
+                ),
+            ],
+            position=1,
+            tick=42.123456,
+            saved=123456.123456,
+        )
+        preview = history._preview(saved)
+        loaded = QueueRecord.from_dict(saved.to_dict())
+        assert preview.saved == loaded.saved
+        assert preview.tick == loaded.tick
+        assert naming.preview_title(preview) == naming.queue_title(loaded)
+        assert naming.preview_detail(preview, now=123500) == naming.queue_detail(
+            loaded, now=123500
+        )
+        assert history._preview(loaded) == preview
+
+    def test_valid_index_does_not_load_full_history(self, monkeypatch):
+        preview = history._preview(record(saved=1.0))
+        data = json.dumps(
+            {"version": 1, "source": [100, 200], "queues": [preview.to_dict()]}
+        )
+        monkeypatch.setattr(history, "_fingerprint", lambda: (100, 200))
+        monkeypatch.setattr(history.xbmcvfs, "File", lambda path: StringIO(data))
+        monkeypatch.setattr(
+            history,
+            "load",
+            lambda: pytest.fail("full track history was loaded"),
+        )
+        assert history.load_previews() == [preview]
+
+    def test_stale_index_is_rebuilt(self, monkeypatch):
+        preview = history._preview(record(saved=1.0))
+        data = json.dumps(
+            {"version": 1, "source": [100, 199], "queues": [preview.to_dict()]}
+        )
+        written = []
+        monkeypatch.setattr(history, "_fingerprint", lambda: (100, 200))
+        monkeypatch.setattr(history.xbmcvfs, "File", lambda path: StringIO(data))
+        monkeypatch.setattr(history, "load", lambda: [record(saved=2.0)])
+        monkeypatch.setattr(history, "_write_previews", written.append)
+        result = history.load_previews()
+        assert [item.saved for item in result] == [2.0]
+        assert len(written) == 1
+
+    def test_nonlocal_store_still_opens_without_index(self, monkeypatch):
+        monkeypatch.setattr(history, "_fingerprint", lambda: None)
+        monkeypatch.setattr(history, "load", lambda: [record(saved=3.0)])
+        assert [item.saved for item in history.load_previews()] == [3.0]
+
+    def test_selection_survives_a_new_capture_while_dialog_is_open(self, monkeypatch):
+        selected = record(keys=("old",), saved=1.0)
+        newer = record(keys=("new",), saved=2.0)
+        monkeypatch.setattr(history, "load", lambda: [newer, selected])
+        assert history.resolve_preview(history._preview(selected)) is selected

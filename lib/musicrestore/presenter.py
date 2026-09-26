@@ -13,7 +13,7 @@ from typing import List, Optional, Union
 import xbmcgui
 
 from . import history, logging as log, naming, settings
-from .model import QueueRecord
+from .model import QueuePreview
 from .naming import Translator
 
 # 30010 is the button's label and stays "Recent queues" — the skin references it
@@ -30,47 +30,64 @@ FALLBACK = {
 }
 
 
-def _row(record: QueueRecord, tr: Translator) -> xbmcgui.ListItem:
+def _row(preview: QueuePreview, tr: Translator) -> xbmcgui.ListItem:
     # offscreen=True skips the graphics lock while we build the list. Without
     # it every ListItem takes the GUI lock, which on a long history is visible.
     item = xbmcgui.ListItem(
-        label=naming.queue_title(record, tr),
-        label2=naming.queue_detail(record, tr=tr),
+        label=naming.preview_title(preview, tr),
+        label2=naming.preview_detail(preview, tr=tr),
         offscreen=True,
     )
-    current = record.current or (record.tracks[0] if record.tracks else None)
-    if current and current.thumb:
-        item.setArt({"thumb": current.thumb, "icon": current.thumb})
+    if preview.thumb:
+        item.setArt({"thumb": preview.thumb, "icon": preview.thumb})
     return item
 
 
 def show(started: Optional[float] = None) -> None:
     """Offer the recorded queues; restore whichever is chosen."""
     t0 = started if started is not None else time.time()
+    stage = time.perf_counter()
     # One Addon for the whole opening: each construction is ~3 ms, and a
     # naive per-string localised() call did that once per format string per
     # row. Icon and the two restore settings come off the same instance.
     addon = settings.addon()
     tr = settings.translator_for(addon)
+    setup_ms = (time.perf_counter() - stage) * 1000.0
 
     def text(string_id: int) -> str:
         return tr(string_id) or FALLBACK.get(string_id, "")
 
-    records = history.load()
-    if not records:
+    stage = time.perf_counter()
+    previews = history.load_previews()
+    load_ms = (time.perf_counter() - stage) * 1000.0
+    if not previews:
         xbmcgui.Dialog().ok(text(HEADING), text(EMPTY_BODY))
         return
 
     # Kodi's select() takes strings or ListItems; the annotation has to be the
     # union it declares, not the narrower list this actually builds.
-    rows: List[Union[str, xbmcgui.ListItem]] = [_row(record, tr) for record in records]
+    stage = time.perf_counter()
+    rows: List[Union[str, xbmcgui.ListItem]] = [
+        _row(preview, tr) for preview in previews
+    ]
+    rows_ms = (time.perf_counter() - stage) * 1000.0
     ready_ms = (time.time() - t0) * 1000.0
     log.info("dialog ready in %.0fms (%d row(s))", ready_ms, len(rows))
+    log.info(
+        "dialog stages: setup %.0fms, load %.0fms, rows %.0fms",
+        setup_ms,
+        load_ms,
+        rows_ms,
+    )
     chosen = xbmcgui.Dialog().select(text(HEADING), rows, useDetails=True)
     if chosen < 0:
         return
 
-    record = records[chosen]
+    preview = previews[chosen]
+    record = history.resolve_preview(preview)
+    if record is None:
+        log.error("selected queue disappeared while dialog was open")
+        return
     try:
         icon = str(addon.getAddonInfo("icon"))
     except Exception:  # noqa: BLE001

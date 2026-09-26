@@ -7,9 +7,9 @@ missing from strings.po.
 """
 
 import time
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
-from .model import QueueRecord
+from .model import QueuePreview, QueueRecord
 
 Translator = Callable[[int], str]
 
@@ -68,15 +68,15 @@ def _unique(values: List[str]) -> List[str]:
     return seen
 
 
-def queue_title(record: QueueRecord, tr: Optional[Translator] = None) -> str:
-    """A name for the queue, derived from what is in it.
+def title_parts(record: QueueRecord) -> Tuple[int, Tuple[str, ...]]:
+    """A compact, language-independent recipe for the queue's title.
 
     Kodi keeps no name for the live playlist — there is no infolabel for it and
     ``CPlayList::m_strPlayListName`` is not reachable over JSON-RPC — so the
     only thing to go on is the tracks themselves.
     """
     if not record.tracks:
-        return _resolve(tr, TITLE_BARE_TRACKS).format(0)
+        return TITLE_BARE_TRACKS, ("0",)
 
     albums = _unique([track.album for track in record.tracks])
     artists = _unique([track.artist for track in record.tracks])
@@ -84,12 +84,12 @@ def queue_title(record: QueueRecord, tr: Optional[Translator] = None) -> str:
     # One album: the album is the queue.
     if len(albums) == 1 and all(track.album for track in record.tracks):
         if len(artists) == 1:
-            return _resolve(tr, TITLE_ALBUM_BY_ARTIST).format(albums[0], artists[0])
-        return albums[0]
+            return TITLE_ALBUM_BY_ARTIST, (albums[0], artists[0])
+        return 0, (albums[0],)
 
     # One artist across several albums: name the artist and say how much.
     if len(artists) == 1 and all(track.artist for track in record.tracks):
-        return _resolve(tr, TITLE_ARTIST_TRACKS).format(artists[0], record.total)
+        return TITLE_ARTIST_TRACKS, (artists[0], str(record.total))
 
     # A mixture. Name it for the track that was playing when it stopped —
     # that is what the listener will hear if they pick this row. Fall back
@@ -97,12 +97,28 @@ def queue_title(record: QueueRecord, tr: Optional[Translator] = None) -> str:
     playing = record.current or record.tracks[0]
     if playing.title:
         if record.total == 1:
-            return playing.title
-        return _resolve(tr, TITLE_FIRST_PLUS_MORE).format(
-            playing.title, record.total - 1
-        )
+            return 0, (playing.title,)
+        return TITLE_FIRST_PLUS_MORE, (playing.title, str(record.total - 1))
 
-    return _resolve(tr, TITLE_BARE_TRACKS).format(record.total)
+    return TITLE_BARE_TRACKS, (str(record.total),)
+
+
+def format_title(
+    string_id: int, args: Tuple[str, ...], tr: Optional[Translator] = None
+) -> str:
+    if string_id == 0:
+        return args[0] if args else ""
+    return _resolve(tr, string_id).format(*args)
+
+
+def queue_title(record: QueueRecord, tr: Optional[Translator] = None) -> str:
+    """A name for the queue, derived from what is in it."""
+    string_id, args = title_parts(record)
+    return format_title(string_id, args, tr)
+
+
+def preview_title(preview: QueuePreview, tr: Optional[Translator] = None) -> str:
+    return format_title(preview.title_id, preview.title_args, tr)
 
 
 def time_ago(
@@ -143,8 +159,15 @@ def clock(seconds: float) -> str:
     return "%d:%02d" % (minutes, secs)
 
 
-def queue_detail(
-    record: QueueRecord, now: Optional[float] = None, tr: Optional[Translator] = None
+def _detail(
+    saved: float,
+    position: int,
+    total: int,
+    unplayed: int,
+    tick: float,
+    finished: bool,
+    now: Optional[float],
+    tr: Optional[Translator],
 ) -> str:
     """The two-line subtitle.
 
@@ -152,16 +175,44 @@ def queue_detail(
     draws as a wrapping textbox — so the newline is honoured rather than
     truncated.
     """
-    ago = time_ago(record.saved, now, tr)
-    if record.finished:
+    ago = time_ago(saved, now, tr)
+    if finished:
         # Restore starts this row at the beginning, so "Track N of N ·
         # stopped at 3:45" would describe a point we will not return to.
         return "%s[CR]%s" % (_resolve(tr, LINE_PLAYED_THROUGH), ago)
-    counts = _resolve(tr, LINE_TRACK_COUNTS).format(
-        record.position + 1, record.total, record.unplayed
-    )
+    counts = _resolve(tr, LINE_TRACK_COUNTS).format(position + 1, total, unplayed)
     # Under a second in means the track had barely started; a "stopped at 0:00"
     # is noise, so the second line is just the age.
-    if record.tick >= 1.0:
-        ago = _resolve(tr, LINE_STOPPED_AT).format(ago, clock(record.tick))
+    if tick >= 1.0:
+        ago = _resolve(tr, LINE_STOPPED_AT).format(ago, clock(tick))
     return "%s[CR]%s" % (counts, ago)
+
+
+def queue_detail(
+    record: QueueRecord, now: Optional[float] = None, tr: Optional[Translator] = None
+) -> str:
+    return _detail(
+        record.saved,
+        record.position,
+        record.total,
+        record.unplayed,
+        record.tick,
+        record.finished,
+        now,
+        tr,
+    )
+
+
+def preview_detail(
+    preview: QueuePreview, now: Optional[float] = None, tr: Optional[Translator] = None
+) -> str:
+    return _detail(
+        preview.saved,
+        preview.position,
+        preview.total,
+        preview.unplayed,
+        preview.tick,
+        preview.finished,
+        now,
+        tr,
+    )
