@@ -1,3 +1,6 @@
+v0.3.5
+- The Restore queue dialog opens faster with large saved queues by reading a small preview index instead of every saved track.
+
 v0.3.4
 - The playing song and the next song are matched to the current music library and fully tagged before playback starts. Kodi adds the rest as native library songs while playback continues.
 - Large queues use bounded, indexed path lookups rather than a SQL expression with one clause per song. A library revision cache speeds repeat restores, with paged JSON-RPC as a fallback.
