@@ -932,11 +932,18 @@ def _wait_for_size(playlist: xbmc.PlayList, wanted: int) -> bool:
 
 
 def _restore_lock_path() -> str:
+    """Return the local restore-lock database path in the add-on profile."""
     return os.path.join(xbmcvfs.translatePath(history.PROFILE), "restore.lock.db")
 
 
 def _acquire_restore_lock() -> Optional[sqlite3.Connection]:
-    """Hold a filesystem lock across separate Kodi Python invocations."""
+    """Try to lock restores across Kodi Python invocations without waiting.
+
+    Create the profile directory and lock database if needed. Return a
+    connection holding a SQLite write transaction; the caller must close it
+    to release the lock. Return None on contention or an OSError or
+    sqlite3.Error during acquisition.
+    """
     connection: Optional[sqlite3.Connection] = None
     try:
         path = _restore_lock_path()
@@ -962,7 +969,19 @@ def restore(
     start_paused: bool = False,
     from_track_start: bool = False,
 ) -> bool:
-    """Run one restore at a time, including across Kodi Python invocations."""
+    """Replace the music queue, allowing one restore at a time per profile.
+
+    Resume at the saved track and offset in seconds, ignoring offsets below
+    five seconds. ``from_track_start`` discards the offset; finished queues
+    start at the first track. ``start_paused`` waits up to ten seconds for
+    audio playback before requesting a pause.
+
+    Return False without changing the playlist or playback if the lock cannot
+    be acquired or no tracks have a file path. Return True when playback was
+    requested and the restore finished, even if the queue is incomplete.
+    Unhandled restore errors propagate after the lock is released; playlist
+    and playback changes are not rolled back.
+    """
     connection = _acquire_restore_lock()
     if connection is None:
         return False
@@ -977,7 +996,15 @@ def _restore_locked(
     start_paused: bool,
     from_track_start: bool,
 ) -> bool:
-    """Start one recorded song, then append and prepend native library items."""
+    """Replace the queue and request playback while the caller holds the lock.
+
+    Prepare the resume track and its successor before playback, then append
+    and prepend the remaining items. Options have the same meaning as in
+    ``restore``. Tracks without a file path are skipped; return False if none
+    remain. Return True after requesting playback and attempting the rebuild,
+    even if some items could not be restored. Unhandled errors propagate and
+    may leave the playlist partially rebuilt.
+    """
     started = time.perf_counter()
     tracks: List[Track] = [track for track in record.tracks if track.file]
     if not tracks:
