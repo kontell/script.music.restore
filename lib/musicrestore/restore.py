@@ -931,10 +931,51 @@ def _wait_for_size(playlist: xbmc.PlayList, wanted: int) -> bool:
     return playlist.size() == wanted
 
 
+def _restore_lock_path() -> str:
+    return os.path.join(xbmcvfs.translatePath(history.PROFILE), "restore.lock.db")
+
+
+def _acquire_restore_lock() -> Optional[sqlite3.Connection]:
+    """Hold a filesystem lock across separate Kodi Python invocations."""
+    connection: Optional[sqlite3.Connection] = None
+    try:
+        path = _restore_lock_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        connection = sqlite3.connect(path, timeout=0, isolation_level=None)
+        connection.execute("BEGIN IMMEDIATE")
+        return connection
+    except (OSError, sqlite3.Error) as error:
+        if connection is not None:
+            connection.close()
+        if (
+            isinstance(error, sqlite3.OperationalError)
+            and "locked" in str(error).lower()
+        ):
+            log.info("restore already in progress; skipping overlapping request")
+        else:
+            log.error("could not acquire restore lock: %s", error)
+        return None
+
+
 def restore(
     record: QueueRecord,
     start_paused: bool = False,
     from_track_start: bool = False,
+) -> bool:
+    """Run one restore at a time, including across Kodi Python invocations."""
+    connection = _acquire_restore_lock()
+    if connection is None:
+        return False
+    try:
+        return _restore_locked(record, start_paused, from_track_start)
+    finally:
+        connection.close()
+
+
+def _restore_locked(
+    record: QueueRecord,
+    start_paused: bool,
+    from_track_start: bool,
 ) -> bool:
     """Start one recorded song, then append and prepend native library items."""
     started = time.perf_counter()

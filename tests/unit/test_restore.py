@@ -4,6 +4,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import pytest
+
 from musicrestore.model import QueueRecord, Track
 from musicrestore.restore import (
     BUILDING,
@@ -293,6 +295,13 @@ class Rig:
 import musicrestore.restore as restore_mod  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def restore_lock_in_tmp(monkeypatch: Any, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        restore_mod, "_restore_lock_path", lambda: str(tmp_path / "restore.lock.db")
+    )
+
+
 def _rows(*tracks: Track) -> Dict[int, Dict[str, Any]]:
     rows = {}
     for track in tracks:
@@ -317,6 +326,37 @@ def _record(tracks: List[Track], position: int = 0, tick: float = 30.0) -> Queue
 
 
 class TestRestoreOrder:
+    def test_overlapping_restore_does_not_touch_the_playlist(
+        self, monkeypatch: Any
+    ) -> None:
+        track = _track(1, 101)
+        rig = Rig(monkeypatch, _rows(track))
+        first = restore_mod._acquire_restore_lock()
+        assert first is not None
+        try:
+            assert restore(_record([track])) is False
+            assert rig.events == []
+            assert rig.playlist.items == []
+            assert rig.player.started is None
+        finally:
+            first.close()
+
+        assert restore(_record([track])) is True
+        assert rig.player.started == 0
+
+    def test_restore_releases_lock_after_an_error(self, monkeypatch: Any) -> None:
+        def fail(*_args: Any) -> bool:
+            raise RuntimeError("failed during restore")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(restore_mod, "_restore_locked", fail)
+            with pytest.raises(RuntimeError, match="failed during restore"):
+                restore(_record([_track(1, 101)]))
+
+        connection = restore_mod._acquire_restore_lock()
+        assert connection is not None
+        connection.close()
+
     def test_two_library_items_are_tagged_before_play(self, monkeypatch: Any) -> None:
         tracks = [_track(n, 100 + n) for n in range(3)]
         rig = Rig(monkeypatch, _rows(*tracks))
