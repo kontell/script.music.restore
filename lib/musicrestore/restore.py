@@ -12,8 +12,9 @@ import os
 import re
 import sqlite3
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 import xbmc
 import xbmcgui
@@ -936,274 +937,297 @@ def _restore_lock_path() -> str:
     return os.path.join(xbmcvfs.translatePath(history.PROFILE), "restore.lock.db")
 
 
-def _acquire_restore_lock() -> Optional[sqlite3.Connection]:
-    """Try to lock restores across Kodi Python invocations without waiting.
+def _lock_held_elsewhere(error: BaseException) -> bool:
+    return (
+        isinstance(error, sqlite3.OperationalError) and "locked" in str(error).lower()
+    )
 
-    Create the profile directory and lock database if needed. Return a
-    connection holding a SQLite write transaction; the caller must close it
-    to release the lock. Return None on contention or an OSError or
-    sqlite3.Error during acquisition.
-    """
-    connection: Optional[sqlite3.Connection] = None
+
+def _begin_restore_lock(path: str) -> sqlite3.Connection:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    connection = sqlite3.connect(path, timeout=0, isolation_level=None)
     try:
-        path = _restore_lock_path()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        connection = sqlite3.connect(path, timeout=0, isolation_level=None)
         connection.execute("BEGIN IMMEDIATE")
-        return connection
-    except (OSError, sqlite3.Error) as error:
-        if connection is not None:
-            connection.close()
-        if (
-            isinstance(error, sqlite3.OperationalError)
-            and "locked" in str(error).lower()
-        ):
-            log.info("restore already in progress; skipping overlapping request")
+    except BaseException:
+        connection.close()
+        raise
+    return connection
+
+
+def _discard_lock_file(path: str) -> None:
+    for suffix in ("", "-journal", "-wal", "-shm"):
+        try:
+            os.remove(path + suffix)
+        except OSError:
+            pass
+
+
+@contextmanager
+def _restore_lock() -> Iterator[bool]:
+    """Yield True when this invocation may restore.
+
+    An uncommitted ``BEGIN IMMEDIATE`` on the profile lock database is the
+    mutex shared by every Kodi Python invocation. Closing the connection
+    releases it. Contention yields False. A lock file SQLite rejects as not a
+    database is removed and the acquire is tried once more. Any other failure
+    is logged and yields True, so a broken lock cannot disable restore.
+    """
+    path = _restore_lock_path()
+    connection: Optional[sqlite3.Connection] = None
+    busy = False
+    try:
+        connection = _begin_restore_lock(path)
+    except sqlite3.OperationalError as error:
+        if _lock_held_elsewhere(error):
+            busy = True
         else:
             log.error("could not acquire restore lock: %s", error)
-        return None
+    except sqlite3.DatabaseError as error:
+        log.error("could not acquire restore lock: %s", error)
+        _discard_lock_file(path)
+        try:
+            connection = _begin_restore_lock(path)
+        except sqlite3.OperationalError as again:
+            if _lock_held_elsewhere(again):
+                busy = True
+            else:
+                log.error("could not acquire restore lock: %s", again)
+        except (OSError, sqlite3.Error) as again:
+            log.error("could not acquire restore lock: %s", again)
+    except OSError as error:
+        log.error("could not acquire restore lock: %s", error)
+    if busy:
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        if connection is not None:
+            connection.close()
 
 
 def restore(
     record: QueueRecord,
     start_paused: bool = False,
     from_track_start: bool = False,
+    announce: Optional[Callable[[], None]] = None,
+    on_busy: Optional[Callable[[], None]] = None,
 ) -> bool:
-    """Replace the music queue, allowing one restore at a time per profile.
+    """Start one recorded song, then append and prepend native library items."""
+    with _restore_lock() as acquired:
+        if not acquired:
+            log.info("restore already in progress; skipping overlapping request")
+            if on_busy is not None:
+                on_busy()
+            return False
+        started = time.perf_counter()
+        tracks: List[Track] = [track for track in record.tracks if track.file]
+        if not tracks:
+            log.error("nothing playable in this record")
+            return False
+        if announce is not None:
+            announce()
 
-    Resume at the saved track and offset in seconds, ignoring offsets below
-    five seconds. ``from_track_start`` discards the offset; finished queues
-    start at the first track. ``start_paused`` waits up to ten seconds for
-    audio playback before requesting a pause.
+        position, tick = playback_start(record, from_track_start)
+        if position >= len(tracks):
+            position, tick = 0, 0.0
 
-    Return False without changing the playlist or playback if the lock cannot
-    be acquired or no tracks have a file path. Return True when playback was
-    requested and the restore finished, even if the queue is incomplete.
-    Unhandled restore errors propagate after the lock is released; playlist
-    and playback changes are not rolled back.
-    """
-    connection = _acquire_restore_lock()
-    if connection is None:
-        return False
-    try:
-        return _restore_locked(record, start_paused, from_track_start)
-    finally:
-        connection.close()
-
-
-def _restore_locked(
-    record: QueueRecord,
-    start_paused: bool,
-    from_track_start: bool,
-) -> bool:
-    """Replace the queue and request playback while the caller holds the lock.
-
-    Prepare the resume track and its successor before playback, then append
-    and prepend the remaining items. Options have the same meaning as in
-    ``restore``. Tracks without a file path are skipped; return False if none
-    remain. Return True after requesting playback and attempting the rebuild,
-    even if some items could not be restored. Unhandled errors propagate and
-    may leave the playlist partially rebuilt.
-    """
-    started = time.perf_counter()
-    tracks: List[Track] = [track for track in record.tracks if track.file]
-    if not tracks:
-        log.error("nothing playable in this record")
-        return False
-
-    position, tick = playback_start(record, from_track_start)
-    if position >= len(tracks):
-        position, tick = 0, 0.0
-
-    item_ids = list(
-        dict.fromkeys(
-            item_id
-            for track in tracks
-            if (item_id := rebind.jellyfin_audio_id(track.file))
+        item_ids = list(
+            dict.fromkeys(
+                item_id
+                for track in tracks
+                if (item_id := rebind.jellyfin_audio_id(track.file))
+            )
         )
-    )
-    # The player may advance immediately when the resume tick is near the end.
-    # Resolve both tracks before play, including current DB IDs, tags and art.
-    near_indexes = [position]
-    if position + 1 < len(tracks):
-        near_indexes.append(position + 1)
-    preparing = time.perf_counter()
-    near = {
-        index: confirm_track(tracks[index], with_art=True) for index in near_indexes
-    }
-    prepared: List[Tuple[str, xbmcgui.ListItem]] = []
-    for index in near_indexes:
-        confirmed = near[index]
-        track = confirmed.track
-        title = track.title if track.title and "://" not in track.title else ""
-        item = xbmcgui.ListItem(
-            label=title or track.file, path=track.file, offscreen=True
-        )
-        item_id = rebind.jellyfin_audio_id(track.file)
-        facts = (
-            confirmed.facts if item_id and confirmed.settled and track.songid else None
-        )
-        _fill(
-            item,
-            track,
-            confirmed.art,
-            bool(track.songid) and confirmed.settled,
-            bool(item_id) and not confirmed.settled,
-            facts,
-            creating=True,
-        )
-        if index == position and tick >= MIN_OFFSET:
-            item.setProperty("StartOffset", str(tick))
-        prepared.append((track.file, item))
-    prepare_ms = _since(preparing)
-    playlist = xbmc.PlayList(MUSIC_PLAYLIST)
-    _set_building(True)
-    played = False
-    try:
-        playlist.clear()
-        _set_restore_source("%.3f:%d" % (record.saved, len(tracks)))
-        for file, item in prepared:
-            playlist.add(file, item)
-        xbmc.Player().play(playlist, startpos=0)
-        played = True
-        log.info(
-            "playback requested for %d-track restore at position %d in %.0fms"
-            " (%d tagged before play in %.0fms, %d lookup(s))",
-            len(tracks),
-            position,
-            _since(started),
-            len(prepared),
-            prepare_ms,
-            sum(confirmed.lookups for confirmed in near.values()),
-        )
-        _set_enriching(True)
-        if start_paused:
-            _pause_once_playing()
-        querying = time.perf_counter()
-        rows, asked = _library_rows(item_ids, tracks)
-        log.info(
-            "library ID map ready in %.0fms (%d/%d cached or found)",
-            _since(querying),
-            sum(isinstance(row, dict) for row in rows.values()),
-            len(item_ids),
-        )
-
-        # Native JSON-RPC items come from CMusicDatabase and already have all
-        # library tags and artwork. A missing song uses its saved file; its
-        # saved display facts are applied after the queue has reached full size.
-        def native_item(track: Track) -> Dict[str, Any]:
+        # The player may advance immediately when the resume tick is near the end.
+        # Resolve both tracks before play, including current DB IDs, tags and art.
+        near_indexes = [position]
+        if position + 1 < len(tracks):
+            near_indexes.append(position + 1)
+        preparing = time.perf_counter()
+        near = {
+            index: confirm_track(tracks[index], with_art=True) for index in near_indexes
+        }
+        prepared: List[Tuple[str, xbmcgui.ListItem]] = []
+        for index in near_indexes:
+            confirmed = near[index]
+            track = confirmed.track
+            title = track.title if track.title and "://" not in track.title else ""
+            item = xbmcgui.ListItem(
+                label=title or track.file, path=track.file, offscreen=True
+            )
             item_id = rebind.jellyfin_audio_id(track.file)
-            row = rows.get(item_id) if item_id else None
-            if isinstance(row, dict):
-                return {"songid": row["songid"]}
-            if not item_id and track.songid:
-                return {"songid": track.songid}
-            return {"file": track.file}
+            facts = (
+                confirmed.facts
+                if item_id and confirmed.settled and track.songid
+                else None
+            )
+            _fill(
+                item,
+                track,
+                confirmed.art,
+                bool(track.songid) and confirmed.settled,
+                bool(item_id) and not confirmed.settled,
+                facts,
+                creating=True,
+            )
+            if index == position and tick >= MIN_OFFSET:
+                item.setProperty("StartOffset", str(tick))
+            prepared.append((track.file, item))
+        prepare_ms = _since(preparing)
+        playlist = xbmc.PlayList(MUSIC_PLAYLIST)
+        _set_building(True)
+        played = False
+        try:
+            playlist.clear()
+            _set_restore_source("%.3f:%d" % (record.saved, len(tracks)))
+            for file, item in prepared:
+                playlist.add(file, item)
+            xbmc.Player().play(playlist, startpos=0)
+            played = True
+            log.info(
+                "playback requested for %d-track restore at position %d in %.0fms"
+                " (%d tagged before play in %.0fms, %d lookup(s))",
+                len(tracks),
+                position,
+                _since(started),
+                len(prepared),
+                prepare_ms,
+                sum(confirmed.lookups for confirmed in near.values()),
+            )
+            _set_enriching(True)
+            if start_paused:
+                _pause_once_playing()
+            querying = time.perf_counter()
+            rows, asked = _library_rows(item_ids, tracks)
+            log.info(
+                "library ID map ready in %.0fms (%d/%d cached or found)",
+                _since(querying),
+                sum(isinstance(row, dict) for row in rows.values()),
+                len(item_ids),
+            )
 
-        tail_started = time.perf_counter()
-        starter_count = len(prepared)
-        tail = tracks[position + starter_count :]
-        if tail and not _append_array([native_item(track) for track in tail]):
-            for offset in range(0, len(tail), 100):
-                block = tail[offset : offset + 100]
+            # Native JSON-RPC items come from CMusicDatabase and already have all
+            # library tags and artwork. A missing song uses its saved file; its
+            # saved display facts are applied after the queue has reached full size.
+            def native_item(track: Track) -> Dict[str, Any]:
+                item_id = rebind.jellyfin_audio_id(track.file)
+                row = rows.get(item_id) if item_id else None
+                if isinstance(row, dict):
+                    return {"songid": row["songid"]}
+                if not item_id and track.songid:
+                    return {"songid": track.songid}
+                return {"file": track.file}
+
+            tail_started = time.perf_counter()
+            starter_count = len(prepared)
+            tail = tracks[position + starter_count :]
+            if tail and not _append_array([native_item(track) for track in tail]):
+                for offset in range(0, len(tail), 100):
+                    block = tail[offset : offset + 100]
+                    outcomes = _native_requests(
+                        "Playlist.Add",
+                        [
+                            {"playlistid": MUSIC_PLAYLIST, "item": native_item(track)}
+                            for track in block
+                        ],
+                    )
+                    log.info(
+                        "native retry accepted %d/%d item(s)", sum(outcomes), len(block)
+                    )
+            if not _wait_for_size(playlist, len(tail) + starter_count):
+                _repair_tail(tail, starter_count)
+            log.info("native queue appended %d following item(s)", len(tail))
+            tail_ms = _since(tail_started)
+            prefix_started = time.perf_counter()
+            prefix = tracks[:position]
+            reversed_prefix = list(reversed(prefix))
+            all_inserted = True
+            for offset in range(0, len(reversed_prefix), 100):
+                block = reversed_prefix[offset : offset + 100]
                 outcomes = _native_requests(
-                    "Playlist.Add",
+                    "Playlist.Insert",
                     [
-                        {"playlistid": MUSIC_PLAYLIST, "item": native_item(track)}
+                        {
+                            "playlistid": MUSIC_PLAYLIST,
+                            "position": 0,
+                            "item": native_item(track),
+                        }
                         for track in block
                     ],
                 )
-                log.info(
-                    "native retry accepted %d/%d item(s)", sum(outcomes), len(block)
+                all_inserted = all_inserted and all(outcomes)
+            if not all_inserted or not _wait_for_size(playlist, len(tracks)):
+                _repair_prefix(prefix)
+            prefix_ms = _since(prefix_started)
+            complete = _wait_for_size(playlist, len(tracks))
+            if not complete:
+                log.error(
+                    "restored queue has %d/%d item(s)", playlist.size(), len(tracks)
                 )
-        if not _wait_for_size(playlist, len(tail) + starter_count):
-            _repair_tail(tail, starter_count)
-        log.info("native queue appended %d following item(s)", len(tail))
-        tail_ms = _since(tail_started)
-        prefix_started = time.perf_counter()
-        prefix = tracks[:position]
-        reversed_prefix = list(reversed(prefix))
-        all_inserted = True
-        for offset in range(0, len(reversed_prefix), 100):
-            block = reversed_prefix[offset : offset + 100]
-            outcomes = _native_requests(
-                "Playlist.Insert",
-                [
-                    {
-                        "playlistid": MUSIC_PLAYLIST,
-                        "position": 0,
-                        "item": native_item(track),
-                    }
-                    for track in block
-                ],
-            )
-            all_inserted = all_inserted and all(outcomes)
-        if not all_inserted or not _wait_for_size(playlist, len(tracks)):
-            _repair_prefix(prefix)
-        prefix_ms = _since(prefix_started)
-        complete = _wait_for_size(playlist, len(tracks))
-        if not complete:
-            log.error("restored queue has %d/%d item(s)", playlist.size(), len(tracks))
-        # The first two items were fully tagged before play. Native song items
-        # already carry library metadata; only unresolved or changed rows need
-        # Python writes now.
-        for index in [position] + [i for i in range(len(tracks)) if i != position]:
-            track = tracks[index]
-            item_id = rebind.jellyfin_audio_id(track.file)
-            row = rows.get(item_id) if item_id else None
-            if index in near:
-                confirmed = near[index]
-                if confirmed.settled and (
-                    (isinstance(row, dict) and confirmed.track.songid == row["songid"])
-                    or (row is None and asked and confirmed.track.songid is None)
-                    or not item_id
-                ):
+            # The first two items were fully tagged before play. Native song items
+            # already carry library metadata; only unresolved or changed rows need
+            # Python writes now.
+            for index in [position] + [i for i in range(len(tracks)) if i != position]:
+                track = tracks[index]
+                item_id = rebind.jellyfin_audio_id(track.file)
+                row = rows.get(item_id) if item_id else None
+                if index in near:
+                    confirmed = near[index]
+                    if confirmed.settled and (
+                        (
+                            isinstance(row, dict)
+                            and confirmed.track.songid == row["songid"]
+                        )
+                        or (row is None and asked and confirmed.track.songid is None)
+                        or not item_id
+                    ):
+                        continue
+                if index not in near and isinstance(row, dict):
                     continue
-            if index not in near and isinstance(row, dict):
-                continue
-            if index in near and isinstance(row, dict):
-                display = rebind.apply_library_hit(track, row)
-                details, error = jsonrpc.invoke(
-                    "AudioLibrary.GetSongDetails",
-                    songid=row["songid"],
-                    properties=_detail_properties(True),
-                )
-                song = (
-                    details.get("songdetails")
-                    if error is None and isinstance(details, dict)
-                    else None
-                )
-                if isinstance(song, dict) and rebind.same_library_song(
-                    track, str(song.get("file") or "")
-                ):
-                    display = rebind.apply_library_hit(track, song)
-                    art = rebind.art_map(song)
-                    facts = song_facts(song)
+                if index in near and isinstance(row, dict):
+                    display = rebind.apply_library_hit(track, row)
+                    details, error = jsonrpc.invoke(
+                        "AudioLibrary.GetSongDetails",
+                        songid=row["songid"],
+                        properties=_detail_properties(True),
+                    )
+                    song = (
+                        details.get("songdetails")
+                        if error is None and isinstance(details, dict)
+                        else None
+                    )
+                    if isinstance(song, dict) and rebind.same_library_song(
+                        track, str(song.get("file") or "")
+                    ):
+                        display = rebind.apply_library_hit(track, song)
+                        art = rebind.art_map(song)
+                        facts = song_facts(song)
+                    else:
+                        art, facts = {}, None
+                    _fill_at(playlist, index, display, art, True, False, facts)
                 else:
-                    art, facts = {}, None
-                _fill_at(playlist, index, display, art, True, False, facts)
-            else:
-                _fill_at(
-                    playlist,
-                    index,
-                    replace(track, songid=None) if item_id and asked else track,
-                    {},
-                    not bool(item_id) and bool(track.songid),
-                    not asked and bool(item_id),
-                    None,
-                )
-        _mark_restore_ready()
-        log.info(
-            "restored %d track(s) in %.0fms (tail %.0fms, prefix %.0fms, complete %s)",
-            len(tracks),
-            _since(started),
-            tail_ms,
-            prefix_ms,
-            complete,
-        )
-    finally:
-        if not played:
-            _set_restore_source("")
-        _set_enriching(False)
-        _set_building(False)
-    return played
+                    _fill_at(
+                        playlist,
+                        index,
+                        replace(track, songid=None) if item_id and asked else track,
+                        {},
+                        not bool(item_id) and bool(track.songid),
+                        not asked and bool(item_id),
+                        None,
+                    )
+            _mark_restore_ready()
+            log.info(
+                "restored %d track(s) in %.0fms (tail %.0fms, prefix %.0fms, complete %s)",
+                len(tracks),
+                _since(started),
+                tail_ms,
+                prefix_ms,
+                complete,
+            )
+        finally:
+            if not played:
+                _set_restore_source("")
+            _set_enriching(False)
+            _set_building(False)
+        return played

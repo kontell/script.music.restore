@@ -331,31 +331,81 @@ class TestRestoreOrder:
     ) -> None:
         track = _track(1, 101)
         rig = Rig(monkeypatch, _rows(track))
-        first = restore_mod._acquire_restore_lock()
-        assert first is not None
-        try:
-            assert restore(_record([track])) is False
+        started: List[str] = []
+        blocked: List[str] = []
+        with restore_mod._restore_lock() as acquired:
+            assert acquired
+            assert (
+                restore(
+                    _record([track]),
+                    announce=lambda: started.append("go"),
+                    on_busy=lambda: blocked.append("busy"),
+                )
+                is False
+            )
+            assert started == []
+            assert blocked == ["busy"]
             assert rig.events == []
             assert rig.playlist.items == []
             assert rig.player.started is None
-        finally:
-            first.close()
 
-        assert restore(_record([track])) is True
+        assert restore(_record([track]), announce=lambda: started.append("go")) is True
+        assert started == ["go"]
         assert rig.player.started == 0
 
     def test_restore_releases_lock_after_an_error(self, monkeypatch: Any) -> None:
-        def fail(*_args: Any) -> bool:
+        def fail(*_args: Any, **_kwargs: Any) -> Tuple[int, float]:
             raise RuntimeError("failed during restore")
 
-        with monkeypatch.context() as patch:
-            patch.setattr(restore_mod, "_restore_locked", fail)
-            with pytest.raises(RuntimeError, match="failed during restore"):
-                restore(_record([_track(1, 101)]))
+        monkeypatch.setattr(restore_mod, "playback_start", fail)
+        with pytest.raises(RuntimeError, match="failed during restore"):
+            restore(_record([_track(1, 101)]))
 
-        connection = restore_mod._acquire_restore_lock()
-        assert connection is not None
-        connection.close()
+        with restore_mod._restore_lock() as acquired:
+            assert acquired
+
+    def test_a_corrupt_lock_file_does_not_block_restore(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        track = _track(1, 101)
+        rig = Rig(monkeypatch, _rows(track))
+        path = tmp_path / "restore.lock.db"
+        path.write_bytes(b"SQLite format 3\x00"[:8])
+        blocked: List[str] = []
+
+        assert restore(_record([track]), on_busy=lambda: blocked.append("busy")) is True
+
+        assert blocked == []
+        assert rig.player.started == 0
+        with restore_mod._restore_lock() as acquired:
+            assert acquired
+
+    def test_an_unopenable_lock_still_restores(self, monkeypatch: Any) -> None:
+        def fail(*_args: Any, **_kwargs: Any) -> None:
+            raise OSError("read-only")
+
+        track = _track(1, 101)
+        rig = Rig(monkeypatch, _rows(track))
+        monkeypatch.setattr(restore_mod.os, "makedirs", fail)
+        blocked: List[str] = []
+
+        assert restore(_record([track]), on_busy=lambda: blocked.append("busy")) is True
+
+        assert blocked == []
+        assert rig.player.started == 0
+
+    def test_a_lock_directory_still_restores(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        track = _track(1, 101)
+        rig = Rig(monkeypatch, _rows(track))
+        (tmp_path / "restore.lock.db").mkdir()
+        blocked: List[str] = []
+
+        assert restore(_record([track]), on_busy=lambda: blocked.append("busy")) is True
+
+        assert blocked == []
+        assert rig.player.started == 0
 
     def test_two_library_items_are_tagged_before_play(self, monkeypatch: Any) -> None:
         tracks = [_track(n, 100 + n) for n in range(3)]
