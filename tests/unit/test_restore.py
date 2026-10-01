@@ -382,21 +382,34 @@ class TestRestoreOrder:
         with restore_mod._restore_lock() as acquired:
             assert acquired
 
-    def test_a_stale_corrupt_lock_is_not_removed(
-        self, monkeypatch: Any, tmp_path: Path
-    ) -> None:
+    def test_a_stale_corrupt_lock_is_not_removed(self, tmp_path: Path) -> None:
         path = tmp_path / "restore.lock.db"
         path.write_bytes(b"SQLite format 3\x00"[:8])
-        stale = restore_mod._lock_file_identity(str(path))
 
         with restore_mod._restore_lock() as acquired:
             assert acquired
-            replaced = restore_mod._lock_file_identity(str(path))
-            assert replaced != stale
-            connection, busy = restore_mod._recover_rejected_lock(str(path), stale)
+            held = restore_mod._lock_file_identity(str(path))
+            # The replacement can reuse the rejected file's inode. Passing that
+            # identity must still be busy, and must not replace the held file.
+            connection, recovery, busy = restore_mod._recover_rejected_lock(
+                str(path), held
+            )
+            assert connection is None
+            assert recovery is None
+            assert busy
+            assert restore_mod._lock_file_identity(str(path)) == held
+
+    def test_a_locked_replacement_with_the_same_inode_is_not_removed(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "restore.lock.db"
+        with restore_mod._restore_lock() as acquired:
+            assert acquired
+            held = restore_mod._lock_file_identity(str(path))
+            connection, busy = restore_mod._replace_rejected_lock(str(path), held)
             assert connection is None
             assert busy
-            assert restore_mod._lock_file_identity(str(path)) == replaced
+            assert restore_mod._lock_file_identity(str(path)) == held
 
     def test_corrupt_lock_recovery_admits_one_restore(self, tmp_path: Path) -> None:
         path = tmp_path / "restore.lock.db"

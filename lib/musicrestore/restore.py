@@ -979,15 +979,11 @@ def _replace_rejected_lock(
 ) -> Tuple[Optional[sqlite3.Connection], bool]:
     """Delete a rejected lock file only when it is still the one we opened.
 
-    ``seen`` is the file's identity from before the failed acquire. Another
-    invocation may have replaced it since, and deleting by pathname would
-    remove that replacement.
+    Open the current file before deleting it. Another invocation may have
+    replaced it, and the kernel can reuse the rejected file's device and inode.
     """
     observed = seen
     for _attempt in range(2):
-        current = _lock_file_identity(path)
-        if current is not None and current == observed:
-            _discard_lock_file(path)
         try:
             return _begin_restore_lock(path), False
         except sqlite3.OperationalError as error:
@@ -997,36 +993,44 @@ def _replace_rejected_lock(
             return None, False
         except sqlite3.DatabaseError as error:
             log.error("could not acquire restore lock: %s", error)
-            observed = _lock_file_identity(path)
         except OSError as error:
             log.error("could not acquire restore lock: %s", error)
             return None, False
+        current = _lock_file_identity(path)
+        if current is not None and current == observed:
+            _discard_lock_file(path)
+        observed = _lock_file_identity(path)
     return None, False
 
 
 def _recover_rejected_lock(
     path: str, seen: Optional[Tuple[int, int]]
-) -> Tuple[Optional[sqlite3.Connection], bool]:
+) -> Tuple[Optional[sqlite3.Connection], Optional[sqlite3.Connection], bool]:
     """Replace a rejected lock file while a second lock excludes other restores.
 
-    The recovery connection stays open until the replacement acquire finishes.
-    Releasing it as soon as ``BEGIN IMMEDIATE`` returns lets another invocation
-    unlink the new file.
+    The recovery connection is returned still open, and the caller closes it
+    when the restore finishes. Closing it when the replacement begin returns
+    lets another invocation unlink the new file if its inode was reused.
     """
     try:
         recovery = _begin_restore_lock(_recovery_lock_path(path))
     except sqlite3.OperationalError as error:
         if _lock_held_elsewhere(error):
-            return None, True
+            return None, None, True
         log.error("could not acquire restore lock: %s", error)
-        return None, False
+        return None, None, False
     except (OSError, sqlite3.Error) as error:
         log.error("could not acquire restore lock: %s", error)
-        return None, False
+        return None, None, False
     try:
-        return _replace_rejected_lock(path, seen)
-    finally:
+        connection, busy = _replace_rejected_lock(path, seen)
+    except BaseException:
         recovery.close()
+        raise
+    if connection is None:
+        recovery.close()
+        return None, None, busy
+    return connection, recovery, False
 
 
 @contextmanager
@@ -1037,34 +1041,39 @@ def _restore_lock() -> Iterator[bool]:
     mutex shared by every Kodi Python invocation. Closing the connection
     releases it. Contention yields False. A lock file SQLite rejects as not a
     database is removed only if it is still the file this attempt opened, and
-    only while a second lock is held through the replacement acquire. Any
-    other failure is logged and yields True, so a broken lock cannot disable
-    restore.
+    only while a second lock is held until this restore releases the first.
+    Any other failure is logged and yields True, so a broken lock cannot
+    disable restore.
     """
     path = _restore_lock_path()
     seen = _lock_file_identity(path)
     connection: Optional[sqlite3.Connection] = None
+    recovery: Optional[sqlite3.Connection] = None
     busy = False
     try:
-        connection = _begin_restore_lock(path)
-    except sqlite3.OperationalError as error:
-        if _lock_held_elsewhere(error):
-            busy = True
-        else:
+        try:
+            connection = _begin_restore_lock(path)
+        except sqlite3.OperationalError as error:
+            if _lock_held_elsewhere(error):
+                busy = True
+            else:
+                log.error("could not acquire restore lock: %s", error)
+        except sqlite3.DatabaseError as error:
             log.error("could not acquire restore lock: %s", error)
-    except sqlite3.DatabaseError as error:
-        log.error("could not acquire restore lock: %s", error)
-        connection, busy = _recover_rejected_lock(path, seen)
-    except OSError as error:
-        log.error("could not acquire restore lock: %s", error)
-    if busy:
-        yield False
-        return
-    try:
+            connection, recovery, busy = _recover_rejected_lock(path, seen)
+        except OSError as error:
+            log.error("could not acquire restore lock: %s", error)
+        if busy:
+            yield False
+            return
         yield True
     finally:
-        if connection is not None:
-            connection.close()
+        try:
+            if connection is not None:
+                connection.close()
+        finally:
+            if recovery is not None:
+                recovery.close()
 
 
 def restore(
