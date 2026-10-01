@@ -61,6 +61,15 @@ msgctxt "#30013"
 msgid "Restoring"
 msgstr ""
 
+# Shown when a restore is refused because one is already running.
+msgctxt "#30014"
+msgid "Restore blocked"
+msgstr ""
+
+msgctxt "#30015"
+msgid "A restore is already in progress."
+msgstr ""
+
 # Row titles. {0}/{1} are substituted by the addon.
 msgctxt "#30030"
 msgid "{0} — {1}"

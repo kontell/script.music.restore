@@ -22,11 +22,15 @@ from .naming import Translator
 HEADING = 30011
 EMPTY_BODY = 30012
 RESTORING = 30013
+BLOCKED_HEADING = 30014
+BLOCKED_MESSAGE = 30015
 
 FALLBACK = {
     HEADING: "Restore queue",
     EMPTY_BODY: "Nothing has been set aside yet. A queue is saved whenever one is replaced, interrupted or stopped.",
     RESTORING: "Restoring",
+    BLOCKED_HEADING: "Restore blocked",
+    BLOCKED_MESSAGE: "A restore is already in progress.",
 }
 
 
@@ -41,6 +45,35 @@ def _row(preview: QueuePreview, tr: Translator) -> xbmcgui.ListItem:
     if preview.thumb:
         item.setArt({"thumb": preview.thumb, "icon": preview.thumb})
     return item
+
+
+def _notify(heading: str, message: str, icon: str, time: int = 2000) -> None:
+    # The addon's own icon rather than NOTIFICATION_INFO's generic "i": the
+    # toast is this addon speaking, and the mark is the one on the button that
+    # opened the dialog. Falls back to the stock icon if the path comes back
+    # empty, since notification() renders nothing for an empty string.
+    xbmcgui.Dialog().notification(
+        heading,
+        message,
+        icon or xbmcgui.NOTIFICATION_INFO,
+        time,
+    )
+
+
+def notify_blocked() -> None:
+    """This restore did not start: one is already running."""
+    addon = settings.addon()
+    tr = settings.translator_for(addon)
+    try:
+        icon = str(addon.getAddonInfo("icon"))
+    except Exception:  # noqa: BLE001
+        icon = ""
+    _notify(
+        tr(BLOCKED_HEADING) or FALLBACK[BLOCKED_HEADING],
+        tr(BLOCKED_MESSAGE) or FALLBACK[BLOCKED_MESSAGE],
+        icon,
+        5000,
+    )
 
 
 def show(started: Optional[float] = None) -> None:
@@ -92,21 +125,14 @@ def show(started: Optional[float] = None) -> None:
         icon = str(addon.getAddonInfo("icon"))
     except Exception:  # noqa: BLE001
         icon = ""
-    # The addon's own icon rather than NOTIFICATION_INFO's generic "i": the
-    # toast is this addon speaking, and the mark is the one on the button that
-    # opened the dialog. Falls back to the stock icon if the path comes back
-    # empty, since notification() renders nothing for an empty string.
-    xbmcgui.Dialog().notification(
-        text(RESTORING),
-        naming.queue_title(record, tr),
-        icon or xbmcgui.NOTIFICATION_INFO,
-        2000,
-    )
+    # Imported here so opening the list does not pay for the player path.
     # Restoring deliberately leaves the entry in place: the history is a log of
     # every time a queue was taken away, not a set of distinct queues. The
     # restored queue is captured again, as a new row, the next time it goes.
-    # Imported here so opening the list does not pay for the player path.
     from . import restore
+
+    def restoring() -> None:
+        _notify(text(RESTORING), naming.queue_title(record, tr), icon)
 
     try:
         start_paused = bool(addon.getSettingBool("startPaused"))
@@ -116,4 +142,12 @@ def show(started: Optional[float] = None) -> None:
         from_track_start = bool(addon.getSettingBool("fromTrackStart"))
     except Exception:  # noqa: BLE001
         from_track_start = False
-    restore.restore(record, start_paused, from_track_start)
+    # The "Restoring" toast waits until this invocation holds the lock, so a
+    # refused restore does not announce the queue it is about to leave alone.
+    restore.restore(
+        record,
+        start_paused,
+        from_track_start,
+        announce=restoring,
+        on_busy=notify_blocked,
+    )
