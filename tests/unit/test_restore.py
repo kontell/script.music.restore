@@ -1,6 +1,8 @@
 """Playback-first restore, library ID validation and native queue building."""
 
 import sqlite3
+import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -379,6 +381,46 @@ class TestRestoreOrder:
         assert rig.player.started == 0
         with restore_mod._restore_lock() as acquired:
             assert acquired
+
+    def test_a_stale_corrupt_lock_is_not_removed(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "restore.lock.db"
+        path.write_bytes(b"SQLite format 3\x00"[:8])
+        stale = restore_mod._lock_file_identity(str(path))
+
+        with restore_mod._restore_lock() as acquired:
+            assert acquired
+            replaced = restore_mod._lock_file_identity(str(path))
+            assert replaced != stale
+            connection, busy = restore_mod._recover_rejected_lock(str(path), stale)
+            assert connection is None
+            assert busy
+            assert restore_mod._lock_file_identity(str(path)) == replaced
+
+    def test_corrupt_lock_recovery_admits_one_restore(self, tmp_path: Path) -> None:
+        path = tmp_path / "restore.lock.db"
+        path.write_bytes(b"not a database")
+        overlap = {"n": 0, "max": 0}
+        gate = threading.Lock()
+
+        def attempt() -> None:
+            with restore_mod._restore_lock() as acquired:
+                if not acquired:
+                    return
+                with gate:
+                    overlap["n"] += 1
+                    overlap["max"] = max(overlap["max"], overlap["n"])
+                time.sleep(0.05)
+                with gate:
+                    overlap["n"] -= 1
+
+        threads = [threading.Thread(target=attempt) for _ in range(6)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert overlap["max"] == 1
 
     def test_an_unopenable_lock_still_restores(self, monkeypatch: Any) -> None:
         def fail(*_args: Any, **_kwargs: Any) -> None:
