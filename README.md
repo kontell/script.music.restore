@@ -16,6 +16,9 @@ Otherwise run it from Add-ons -> Program add-ons. Both open the same pop-up.
 
 ![Screenshot 1](docs/screenshot-01.png)
 
+Regardless of the number of tracks, playback should begin within a few seconds, after which the add-on will continue to build the playlist in the background.
+
+For a large playlist this can take some time and restoring additional queues is blocked until it is complete. If you attempt to open the recent queues dialog a second time during a restore, its opening will be delayed until the restore is complete.
 
 ## What gets recorded
 

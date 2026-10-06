@@ -1,8 +1,12 @@
 """Playback-first restore, library ID validation and native queue building."""
 
 import sqlite3
+import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+import pytest
 
 from musicrestore.model import QueueRecord, Track
 from musicrestore.restore import (
@@ -293,6 +297,13 @@ class Rig:
 import musicrestore.restore as restore_mod  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def restore_lock_in_tmp(monkeypatch: Any, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        restore_mod, "_restore_lock_path", lambda: str(tmp_path / "restore.lock.db")
+    )
+
+
 def _rows(*tracks: Track) -> Dict[int, Dict[str, Any]]:
     rows = {}
     for track in tracks:
@@ -317,6 +328,140 @@ def _record(tracks: List[Track], position: int = 0, tick: float = 30.0) -> Queue
 
 
 class TestRestoreOrder:
+    def test_overlapping_restore_does_not_touch_the_playlist(
+        self, monkeypatch: Any
+    ) -> None:
+        track = _track(1, 101)
+        rig = Rig(monkeypatch, _rows(track))
+        started: List[str] = []
+        blocked: List[str] = []
+        with restore_mod._restore_lock() as acquired:
+            assert acquired
+            assert (
+                restore(
+                    _record([track]),
+                    announce=lambda: started.append("go"),
+                    on_busy=lambda: blocked.append("busy"),
+                )
+                is False
+            )
+            assert started == []
+            assert blocked == ["busy"]
+            assert rig.events == []
+            assert rig.playlist.items == []
+            assert rig.player.started is None
+
+        assert restore(_record([track]), announce=lambda: started.append("go")) is True
+        assert started == ["go"]
+        assert rig.player.started == 0
+
+    def test_restore_releases_lock_after_an_error(self, monkeypatch: Any) -> None:
+        def fail(*_args: Any, **_kwargs: Any) -> Tuple[int, float]:
+            raise RuntimeError("failed during restore")
+
+        monkeypatch.setattr(restore_mod, "playback_start", fail)
+        with pytest.raises(RuntimeError, match="failed during restore"):
+            restore(_record([_track(1, 101)]))
+
+        with restore_mod._restore_lock() as acquired:
+            assert acquired
+
+    def test_a_corrupt_lock_file_does_not_block_restore(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        track = _track(1, 101)
+        rig = Rig(monkeypatch, _rows(track))
+        path = tmp_path / "restore.lock.db"
+        path.write_bytes(b"SQLite format 3\x00"[:8])
+        blocked: List[str] = []
+
+        assert restore(_record([track]), on_busy=lambda: blocked.append("busy")) is True
+
+        assert blocked == []
+        assert rig.player.started == 0
+        with restore_mod._restore_lock() as acquired:
+            assert acquired
+
+    def test_a_stale_corrupt_lock_is_not_removed(self, tmp_path: Path) -> None:
+        path = tmp_path / "restore.lock.db"
+        path.write_bytes(b"SQLite format 3\x00"[:8])
+
+        with restore_mod._restore_lock() as acquired:
+            assert acquired
+            held = restore_mod._lock_file_identity(str(path))
+            # The replacement can reuse the rejected file's inode. Passing that
+            # identity must still be busy, and must not replace the held file.
+            connection, recovery, busy = restore_mod._recover_rejected_lock(
+                str(path), held
+            )
+            assert connection is None
+            assert recovery is None
+            assert busy
+            assert restore_mod._lock_file_identity(str(path)) == held
+
+    def test_a_locked_replacement_with_the_same_inode_is_not_removed(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "restore.lock.db"
+        with restore_mod._restore_lock() as acquired:
+            assert acquired
+            held = restore_mod._lock_file_identity(str(path))
+            connection, busy = restore_mod._replace_rejected_lock(str(path), held)
+            assert connection is None
+            assert busy
+            assert restore_mod._lock_file_identity(str(path)) == held
+
+    def test_corrupt_lock_recovery_admits_one_restore(self, tmp_path: Path) -> None:
+        path = tmp_path / "restore.lock.db"
+        path.write_bytes(b"not a database")
+        overlap = {"n": 0, "max": 0}
+        gate = threading.Lock()
+
+        def attempt() -> None:
+            with restore_mod._restore_lock() as acquired:
+                if not acquired:
+                    return
+                with gate:
+                    overlap["n"] += 1
+                    overlap["max"] = max(overlap["max"], overlap["n"])
+                time.sleep(0.05)
+                with gate:
+                    overlap["n"] -= 1
+
+        threads = [threading.Thread(target=attempt) for _ in range(6)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert overlap["max"] == 1
+
+    def test_an_unopenable_lock_still_restores(self, monkeypatch: Any) -> None:
+        def fail(*_args: Any, **_kwargs: Any) -> None:
+            raise OSError("read-only")
+
+        track = _track(1, 101)
+        rig = Rig(monkeypatch, _rows(track))
+        monkeypatch.setattr(restore_mod.os, "makedirs", fail)
+        blocked: List[str] = []
+
+        assert restore(_record([track]), on_busy=lambda: blocked.append("busy")) is True
+
+        assert blocked == []
+        assert rig.player.started == 0
+
+    def test_a_lock_directory_still_restores(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        track = _track(1, 101)
+        rig = Rig(monkeypatch, _rows(track))
+        (tmp_path / "restore.lock.db").mkdir()
+        blocked: List[str] = []
+
+        assert restore(_record([track]), on_busy=lambda: blocked.append("busy")) is True
+
+        assert blocked == []
+        assert rig.player.started == 0
+
     def test_two_library_items_are_tagged_before_play(self, monkeypatch: Any) -> None:
         tracks = [_track(n, 100 + n) for n in range(3)]
         rig = Rig(monkeypatch, _rows(*tracks))

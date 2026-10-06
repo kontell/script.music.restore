@@ -510,8 +510,14 @@ class Recorder(xbmc.Monitor):
         if not records:
             return
         log.info("restoring the newest queue on startup")
+        # Imported here so the service module does not load the dialog on the way up.
+        from . import presenter
+
         restore.restore(
-            records[0], settings.start_paused(), settings.from_track_start()
+            records[0],
+            settings.start_paused(),
+            settings.from_track_start(),
+            on_busy=presenter.notify_blocked,
         )
 
     # ----------------------------------------------------------------- loop
