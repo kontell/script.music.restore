@@ -1,3 +1,6 @@
+v0.3.6
+- Prevent overlapping music queue restores
+
 v0.3.5
 - The Restore queue dialog opens faster with large saved queues by reading a small preview index instead of every saved track.
 
