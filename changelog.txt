@@ -1,3 +1,6 @@
+v0.3.7
+- A queue of kofin songs with plugin paths restores every track, instead of repeating one, and each track plays
+
 v0.3.6
 - Prevent overlapping music queue restores
 
