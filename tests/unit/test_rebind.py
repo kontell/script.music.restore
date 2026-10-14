@@ -44,6 +44,33 @@ class TestJellyfinAudioId:
             == JID
         )
 
+    def test_native_plugin_path_is_the_file_not_the_server_key(self):
+        assert (
+            jellyfin_audio_id(
+                "plugin://plugin.video.kofin/native/%s/%s/music/%s/%s.flac"
+                % ("c" * 32, "d" * 32, "e" * 32, JID)
+            )
+            == JID
+        )
+
+    def test_native_single_path(self):
+        assert (
+            jellyfin_audio_id(
+                "plugin://plugin.video.kofin/native/%s/%s/music/singles/%s/%s.mp3"
+                % ("c" * 32, "d" * 32, "e" * 32, JID)
+            )
+            == JID
+        )
+
+    def test_a_native_directory_names_no_song(self):
+        assert (
+            jellyfin_audio_id(
+                "plugin://plugin.video.kofin/native/%s/%s/music/%s/"
+                % ("c" * 32, "d" * 32, "e" * 32)
+            )
+            is None
+        )
+
     def test_local_file_has_none(self):
         assert jellyfin_audio_id("/music/album/track.flac") is None
 

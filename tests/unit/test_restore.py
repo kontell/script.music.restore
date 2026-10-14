@@ -1,10 +1,12 @@
 """Playback-first restore, library ID validation and native queue building."""
 
+import os
 import sqlite3
 import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -23,9 +25,19 @@ def _url(n: int) -> str:
     return "http://jelly/Audio/%s/stream.flac?static=true" % format(n, "032x")
 
 
-def _track(n: int, songid: Optional[int]) -> Track:
+def _native_url(n: int) -> str:
+    # One server key and library for every song, as kofin writes them.
+    return "plugin://plugin.video.kofin/native/%s/%s/music/%s/%s.flac" % (
+        "c" * 32,
+        "d" * 32,
+        "e" * 32,
+        format(n, "032x"),
+    )
+
+
+def _track(n: int, songid: Optional[int], native: bool = False) -> Track:
     return Track(
-        file=_url(n),
+        file=_native_url(n) if native else _url(n),
         title="T%d" % n,
         artist="A",
         album="Al",
@@ -71,6 +83,9 @@ class FakeTag:
 
     def getDuration(self) -> int:
         return self.duration
+
+    def getDbId(self) -> int:
+        return self.dbid if self.dbid is not None else -1
 
 
 class FakeItem:
@@ -213,7 +228,13 @@ class Rig:
             if "songid" in wanted and song is None:
                 outcomes.append(False)
                 continue
-            path = song["file"] if song else wanted["file"]
+            # Kodi files a song built from the library under musicdb://.
+            path = (
+                "musicdb://songs/%d%s"
+                % (song["songid"], os.path.splitext(urlsplit(song["file"]).path)[1])
+                if song
+                else wanted["file"]
+            )
             item = FakeItem(label=song.get("title", "") if song else path, path=path)
             if song:
                 artist = song.get("artist", [])
@@ -270,9 +291,18 @@ class Rig:
         if method == "AudioLibrary.GetSongs":
             all_songs = [dict(row) for row in self.rows.values()]
             if "filter" in params:
-                wanted = params["filter"]["value"]
+                rules = params["filter"].get("or", [params["filter"]])
+
+                def matches(song: Dict[str, Any], rule: Dict[str, str]) -> bool:
+                    # Kodi files a song as path.strPath + song.strFileName.
+                    path, _, leaf = str(song.get("file") or "").rpartition("/")
+                    field = path + "/" if rule["field"] == "path" else leaf
+                    return rule["value"] in field
+
                 songs = [
-                    song for song in all_songs if wanted in str(song.get("file") or "")
+                    song
+                    for song in all_songs
+                    if any(matches(song, rule) for rule in rules)
                 ][:1]
                 return {"songs": songs}, None
             for song in all_songs:
@@ -482,8 +512,12 @@ class TestRestoreOrder:
         assert "art" not in query["properties"]
         assert "filter" not in query
         assert query["limits"] == {"start": 0, "end": 1000}
+        # Kodi files a song added by id under musicdb://, and opens an http
+        # file through it.
         assert [item.path for item in rig.playlist.items] == [
-            track.file for track in tracks
+            tracks[0].file,
+            tracks[1].file,
+            "musicdb://songs/102.flac",
         ]
         assert [item.tag.dbid for item in rig.playlist.items] == [100, 101, 102]
         assert [item.label for item in rig.playlist.items] == ["T0", "T1", "Library T2"]
@@ -507,9 +541,6 @@ class TestRestoreOrder:
         assert rig.player.at_play == [("T2", 102, ""), ("T3", 103, "")]
         assert [item.tag.dbid for item in rig.playlist.items] == [100, 101, 102, 103]
         assert rig.playlist.items[2].props["StartOffset"] == "40.0"
-        assert [item.path for item in rig.playlist.items] == [
-            track.file for track in tracks
-        ]
 
     def test_next_item_is_fully_tagged_before_nearly_finished_resume(
         self, monkeypatch: Any
@@ -559,6 +590,52 @@ class TestRestoreOrder:
         assert item.tag.playcount == 2
         assert item.path == tracks[0].file
         assert item.props.get("StartOffset") is None  # 1s is below the offset
+
+    def test_native_kofin_songs_keep_their_ids_and_play_through_the_plugin(
+        self, monkeypatch: Any
+    ) -> None:
+        tracks = [_track(n, 100 + n, native=True) for n in range(5)]
+        rig = Rig(monkeypatch, _rows(*tracks))
+
+        assert restore(_record(tracks, position=2)) is True
+
+        assert [item.tag.dbid for item in rig.playlist.items] == [
+            100,
+            101,
+            102,
+            103,
+            104,
+        ]
+        # Kodi opens musicdb://songs/<id> as a file; only a plugin:// path
+        # is resolved through kofin.
+        assert [item.path for item in rig.playlist.items] == [
+            track.file for track in tracks
+        ]
+
+    def test_a_replaced_item_is_not_repointed(self) -> None:
+        playlist = FakePlaylist()
+        playlist.add("musicdb://songs/7.flac", FakeItem())
+        playlist.items[0].tag.dbid = 7
+
+        assert not restore_mod._play_through_plugin(
+            playlist, 0, 8, _native_url(1)  # type: ignore[arg-type]
+        )
+        assert playlist.items[0].path == "musicdb://songs/7.flac"
+
+    def test_a_reused_native_songid_is_found_by_file_name(
+        self, monkeypatch: Any
+    ) -> None:
+        tracks = [_track(1, 50, native=True)]
+        rows = {
+            50: {"songid": 50, "file": _native_url(99), "title": "Wrong"},
+            7: {"songid": 7, "file": tracks[0].file, "title": "Right"},
+        }
+        rig = Rig(monkeypatch, rows)
+
+        assert restore(_record(tracks, tick=1.0)) is True
+
+        assert rig.player.at_play == [("T1", 7, "")]
+        assert rig.playlist.items[0].tag.dbid == 7
 
     def test_a_url_stored_as_the_title_is_replaced(self, monkeypatch: Any) -> None:
         track = _track(1, 10)
@@ -667,9 +744,8 @@ class TestRestoreOrder:
         assert rig.playlist.items[34].props["StartOffset"] == "241.0"
         assert rig.playlist.items[34].tag.year == 1977
         assert rig.playlist.items[34].tag.genres == ["Rock"]
-        assert all(item.tag.dbid is not None for item in rig.playlist.items)
-        assert [item.path for item in rig.playlist.items] == [
-            track.file for track in tracks
+        assert [item.tag.dbid for item in rig.playlist.items] == [
+            track.songid for track in tracks
         ]
 
     def test_warm_cache_populates_resume_before_play_without_scan(
