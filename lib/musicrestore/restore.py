@@ -251,14 +251,20 @@ def _scan(item_id: str, with_art: bool) -> object:
     Returns the song dict, None when the library was asked and the song is
     gone, or :data:`rebind.LOOKUP_FAILED` when it could not be asked.
 
-    Filters on path: Kodi stores the host URL in ``path.strPath`` and the
-    ``stream.*`` leaf in ``song.strFileName``, so a filename filter misses.
+    Filters on path or filename. A direct or older plugin URL has the id in
+    ``path.strPath`` and a ``stream.*`` leaf in ``song.strFileName``; a native
+    kofin song is the other way round, so either field alone misses one.
     ``includesingles`` is set because an absent value makes ``GetSongs`` skip
     singles, and a repaired single would then look deleted.
     """
     result, error = jsonrpc.invoke(
         "AudioLibrary.GetSongs",
-        filter={"field": "path", "operator": "contains", "value": item_id},
+        filter={
+            "or": [
+                {"field": "path", "operator": "contains", "value": item_id},
+                {"field": "filename", "operator": "contains", "value": item_id},
+            ]
+        },
         properties=_detail_properties(with_art),
         includesingles=True,
         limits={"end": 1},
@@ -622,6 +628,30 @@ def _fill_at(
         timings,
         clear_pending=clear_pending,
     )
+
+
+def _play_through_plugin(
+    playlist: xbmc.PlayList, index: int, songid: int, file: str
+) -> bool:
+    """Make a song queued by id play from its plugin URL.
+
+    Kodi gives a song built from the library the path
+    ``musicdb://songs/<id>.<ext>`` and opens it by reading the file behind
+    it. A plugin URL is not a file: only an item whose own path is
+    ``plugin://`` goes through its add-on, so a native kofin song queued by
+    id fails with "Error opening file". Setting the path keeps the library
+    tag, id included.
+    """
+    try:
+        item = playlist[index]  # type: ignore[index]
+    except Exception:  # noqa: BLE001 - the playlist can shrink under us
+        return False
+    # A user can replace the queue while it is built. Never repoint whatever
+    # now occupies the same numeric position.
+    if item.getMusicInfoTag().getDbId() != songid:
+        return False
+    item.setPath(file)
+    return True
 
 
 def _apply_library(
@@ -1189,6 +1219,26 @@ def restore(
                     return {"songid": track.songid}
                 return {"file": track.file}
 
+            # Each item costs two GUI frames, so the songs the player reaches
+            # next are repointed as soon as they are queued.
+            repointed = 0
+            repoint_ms = 0.0
+
+            def repoint(first: int, block: Sequence[Track]) -> None:
+                nonlocal repointed, repoint_ms
+                began = time.perf_counter()
+                for offset, track in enumerate(block):
+                    item_id = rebind.jellyfin_audio_id(track.file)
+                    row = rows.get(item_id) if item_id else None
+                    if not isinstance(row, dict):
+                        continue
+                    file = str(row.get("file") or "")
+                    if file.startswith("plugin://") and _play_through_plugin(
+                        playlist, first + offset, row["songid"], file
+                    ):
+                        repointed += 1
+                repoint_ms += _since(began)
+
             tail_started = time.perf_counter()
             starter_count = len(prepared)
             tail = tracks[position + starter_count :]
@@ -1208,6 +1258,7 @@ def restore(
             if not _wait_for_size(playlist, len(tail) + starter_count):
                 _repair_tail(tail, starter_count)
             log.info("native queue appended %d following item(s)", len(tail))
+            repoint(starter_count, tail)
             tail_ms = _since(tail_started)
             prefix_started = time.perf_counter()
             prefix = tracks[:position]
@@ -1229,6 +1280,7 @@ def restore(
                 all_inserted = all_inserted and all(outcomes)
             if not all_inserted or not _wait_for_size(playlist, len(tracks)):
                 _repair_prefix(prefix)
+            repoint(0, prefix)
             prefix_ms = _since(prefix_started)
             complete = _wait_for_size(playlist, len(tracks))
             if not complete:
@@ -1286,6 +1338,12 @@ def restore(
                         not asked and bool(item_id),
                         None,
                     )
+            if repointed:
+                log.info(
+                    "pointed %d library item(s) at their plugin URL in %.0fms",
+                    repointed,
+                    repoint_ms,
+                )
             _mark_restore_ready()
             log.info(
                 "restored %d track(s) in %.0fms (tail %.0fms, prefix %.0fms, complete %s)",

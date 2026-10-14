@@ -3,8 +3,9 @@
 A kofin library repair deletes songs and inserts them again. ``idSong`` is
 ``INTEGER PRIMARY KEY`` without ``AUTOINCREMENT``, so the new rows reuse the
 old numbers — often for different tracks, because a repair walks newest-first.
-The file URL still names the Jellyfin item (``/Audio/<id>/`` or
-``plugin://plugin.video.kofin/<library>/<id>/``), which survives the rebuild.
+The file URL still names the Jellyfin item (``/Audio/<id>/``,
+``plugin://plugin.video.kofin/<library>/<id>/``, or a native kofin song file
+``…/music/<album>/<id>.<ext>``), which survives the rebuild.
 
 Restore checks a stored id before putting it on the queued item's music tag.
 A stale id would attach that item to whoever now occupies the number — play
@@ -23,9 +24,16 @@ LOOKUP_FAILED = object()
 Lookup = Callable[[str], Union[Dict[str, Any], None, object]]
 
 # Jellyfin audio item ids are 32 hex chars. Direct paths put them under
-# /Audio/<id>/; the plugin form puts them as the last path segment.
+# /Audio/<id>/, and the older plugin form after the library id. A native
+# kofin song is native/<key>/<library>/music/<album>/<id>.<ext>, with
+# singles/<artist> in place of the album. The key is the same for every song
+# from a server, so taking the first id after the add-on name would make one
+# song of the whole library.
 _JELLYFIN_AUDIO = re.compile(
-    r"(?:/Audio/|plugin://plugin\.video\.kofin/[^/]+/)([0-9a-fA-F]{32})",
+    r"/Audio/([0-9a-fA-F]{32})"
+    r"|plugin://plugin\.video\.kofin/native/[0-9a-fA-F]{32}/[0-9a-fA-F]{32}/"
+    r"music/(?:singles/)?[0-9a-zA-Z]+/([0-9a-fA-F]{32})\."
+    r"|plugin://plugin\.video\.kofin/(?!native/)[^/]+/([0-9a-fA-F]{32})",
 )
 
 
@@ -39,7 +47,9 @@ def _display(value: str) -> str:
 def jellyfin_audio_id(file: str) -> Optional[str]:
     """The Jellyfin item id baked into a kofin/Jellyfin song URL, or None."""
     match = _JELLYFIN_AUDIO.search(file or "")
-    return match.group(1).lower() if match else None
+    if not match:
+        return None
+    return next(group for group in match.groups() if group).lower()
 
 
 def same_library_song(track: Track, file: str) -> bool:

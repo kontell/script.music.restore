@@ -34,7 +34,7 @@ loads the full history only when a row is selected.
 
 `restore.py` validates and fully tags the current and next tracks before starting playback. It applies `StartOffset` to the current track, starts those two items, then builds the rest of the queue while the player runs.
 
-The remaining tracks are mapped to current library song IDs through a revision-aware cache, an indexed read-only SQLite query, or paged JSON-RPC scans. Native `Playlist.Add` supplies library metadata for the following tracks; individual `Playlist.Insert` requests prepend the earlier tracks and preserve the playing position. Unresolved items are repaired from the saved record. The recorder keeps the saved queue as its shadow until the build finishes, so an interrupted build does not replace history with a partial queue.
+The remaining tracks are mapped to current library song IDs through a revision-aware cache, an indexed read-only SQLite query, or paged JSON-RPC scans. Native `Playlist.Add` supplies library metadata for the following tracks; individual `Playlist.Insert` requests prepend the earlier tracks and preserve the playing position. A song added by id plays from `musicdb://songs/<id>`, which Kodi cannot open when the song's file is a `plugin://` URL, so those items are given their plugin URL as their path as soon as they are queued. Unresolved items are repaired from the saved record. The recorder keeps the saved queue as its shadow until the build finishes, so an interrupted build does not replace history with a partial queue.
 
 For general Kodi behavior, see `../kodi-drive/README.md` and the kodi-drive skills.
 
